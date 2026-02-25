@@ -1,0 +1,26 @@
+# Core
+verl>=0.3.0
+datasets>=2.18.0
+transformers>=4.40.0
+pandas>=2.0.0
+pyarrow>=14.0.0
+
+# Tokenization (for length filtering)
+tiktoken>=0.6.0
+
+# Deduplication
+datasketch>=1.6.0
+
+# Training
+torch>=2.2.0
+peft>=0.10.0
+
+# Evaluation
+triton>=2.2.0
+
+# Logging
+wandb>=0.16.0
+
+# Utilities
+tqdm>=4.66.0
+rich>=13.7.0
