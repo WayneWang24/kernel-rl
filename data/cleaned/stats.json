@@ -1,0 +1,72 @@
+{
+  "steps": [
+    {
+      "step": "remove_empty",
+      "remaining": 18162,
+      "removed": 0,
+      "removed_pct": "0.0%"
+    },
+    {
+      "step": "filter_length",
+      "remaining": 17625,
+      "removed": 537,
+      "removed_pct": "3.0%"
+    },
+    {
+      "step": "filter_structure",
+      "remaining": 17625,
+      "removed": 0,
+      "removed_pct": "0.0%"
+    },
+    {
+      "step": "syntax_check",
+      "remaining": 17624,
+      "removed": 1,
+      "removed_pct": "0.0%"
+    },
+    {
+      "step": "triton_markers",
+      "remaining": 17624,
+      "removed": 0,
+      "removed_pct": "0.0%"
+    },
+    {
+      "step": "synthetic_quality",
+      "remaining": 17624,
+      "removed": 0,
+      "removed_pct": "0.0%"
+    },
+    {
+      "step": "repo_concentration",
+      "remaining": 17624,
+      "removed": 0,
+      "removed_pct": "0.0%"
+    },
+    {
+      "step": "dedup_exact",
+      "remaining": 13262,
+      "removed": 4362,
+      "removed_pct": "24.8%"
+    }
+  ],
+  "original_count": 18162,
+  "final_count": 13262,
+  "retention_rate": "73.0%",
+  "token_stats": {
+    "prompt": {
+      "mean": 383,
+      "median": 268,
+      "p95": 1057,
+      "max": 4091
+    },
+    "response": {
+      "mean": 1897,
+      "median": 1473,
+      "p95": 4816,
+      "max": 8185
+    }
+  },
+  "synthetic_count": 0,
+  "real_count": 13262,
+  "unique_repos": 6847
+}
