@@ -58,15 +58,22 @@ def filter_length(
     max_prompt_tokens: int = 4096,
     max_response_tokens: int = 8192,
     min_response_tokens: int = 50,
+    prompt_template_overhead: int = 200,
 ) -> pd.DataFrame:
-    """按 token 长度过滤。"""
-    print("  Estimating token lengths...")
+    """按 token 长度过滤。
+
+    prompt_template_overhead: SFT/RL prompt 模板额外占用的 token 数。
+    实际训练时 prompt = 模板指令 + python_code，所以 python_code 的
+    有效上限 = max_prompt_tokens - prompt_template_overhead。
+    """
+    effective_max_prompt = max_prompt_tokens - prompt_template_overhead
+    print(f"  Estimating token lengths (prompt effective max: {effective_max_prompt})...")
     df = df.copy()
     df["_prompt_tokens"] = df["python_code"].apply(estimate_tokens)
     df["_response_tokens"] = df["triton_code"].apply(estimate_tokens)
 
     mask = (
-        (df["_prompt_tokens"] <= max_prompt_tokens)
+        (df["_prompt_tokens"] <= effective_max_prompt)
         & (df["_response_tokens"] <= max_response_tokens)
         & (df["_response_tokens"] >= min_response_tokens)
     )
@@ -93,7 +100,7 @@ def filter_structure(df: pd.DataFrame) -> pd.DataFrame:
 # ============================================================
 
 def filter_syntax(df: pd.DataFrame) -> pd.DataFrame:
-    """Python 语法检查。"""
+    """Python 语法检查（同时检查 python_code 和 triton_code）。"""
     def check_python_syntax(code: str) -> bool:
         try:
             ast.parse(code)
@@ -101,8 +108,9 @@ def filter_syntax(df: pd.DataFrame) -> pd.DataFrame:
         except SyntaxError:
             return False
 
-    mask = df["python_code"].apply(check_python_syntax)
-    return df[mask].copy()
+    mask_python = df["python_code"].apply(check_python_syntax)
+    mask_triton = df["triton_code"].apply(check_python_syntax)
+    return df[mask_python & mask_triton].copy()
 
 
 def filter_triton_markers(df: pd.DataFrame) -> pd.DataFrame:
@@ -166,11 +174,12 @@ def filter_repo_concentration(df: pd.DataFrame, max_per_repo: int = 50) -> pd.Da
 
 def deduplicate(
     df: pd.DataFrame,
-    method: str = "exact",
+    method: str = "minhash",
     threshold: float = 0.85,
 ) -> pd.DataFrame:
-    """去重。"""
-    codes = df["python_code"].tolist()
+    """双侧去重：拼接 python_code + triton_code 后去重。"""
+    # 拼接输入侧和输出侧，避免只对单侧去重导致输出模式重复
+    codes = (df["python_code"] + "\n### SEPARATOR ###\n" + df["triton_code"]).tolist()
     priorities = df["stars"].tolist() if "stars" in df.columns else None
 
     if method == "minhash":
@@ -193,7 +202,7 @@ def run_cleaning(
     max_response_tokens: int = 8192,
     min_response_tokens: int = 50,
     max_per_repo: int = 50,
-    dedup_method: str = "exact",
+    dedup_method: str = "minhash",
     dedup_threshold: float = 0.85,
 ) -> pd.DataFrame:
     """运行完整清洗流程。"""
@@ -343,8 +352,8 @@ def main():
     parser.add_argument(
         "--dedup_method",
         choices=["exact", "minhash"],
-        default="exact",
-        help="Deduplication method (default: exact)",
+        default="minhash",
+        help="Deduplication method (default: minhash)",
     )
     parser.add_argument(
         "--dedup_threshold",
