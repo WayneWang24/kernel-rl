@@ -175,7 +175,7 @@ def filter_repo_concentration(df: pd.DataFrame, max_per_repo: int = 50) -> pd.Da
 def deduplicate(
     df: pd.DataFrame,
     method: str = "minhash",
-    threshold: float = 0.85,
+    threshold: float = 0.70,
 ) -> pd.DataFrame:
     """双侧去重：拼接 python_code + triton_code 后去重。"""
     # 拼接输入侧和输出侧，避免只对单侧去重导致输出模式重复
@@ -203,7 +203,7 @@ def run_cleaning(
     min_response_tokens: int = 50,
     max_per_repo: int = 50,
     dedup_method: str = "minhash",
-    dedup_threshold: float = 0.85,
+    dedup_threshold: float = 0.70,
 ) -> pd.DataFrame:
     """运行完整清洗流程。"""
     stats = {"steps": []}
@@ -358,8 +358,8 @@ def main():
     parser.add_argument(
         "--dedup_threshold",
         type=float,
-        default=0.85,
-        help="MinHash similarity threshold (default: 0.85)",
+        default=0.70,
+        help="MinHash similarity threshold (default: 0.70)",
     )
     args = parser.parse_args()
 
