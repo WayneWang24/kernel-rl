@@ -8,65 +8,65 @@
     },
     {
       "step": "filter_length",
-      "remaining": 17625,
-      "removed": 537,
-      "removed_pct": "3.0%"
+      "remaining": 17538,
+      "removed": 624,
+      "removed_pct": "3.4%"
     },
     {
       "step": "filter_structure",
-      "remaining": 17625,
+      "remaining": 17538,
       "removed": 0,
       "removed_pct": "0.0%"
     },
     {
       "step": "syntax_check",
-      "remaining": 17624,
+      "remaining": 17537,
       "removed": 1,
       "removed_pct": "0.0%"
     },
     {
       "step": "triton_markers",
-      "remaining": 17624,
+      "remaining": 17537,
       "removed": 0,
       "removed_pct": "0.0%"
     },
     {
       "step": "synthetic_quality",
-      "remaining": 17624,
+      "remaining": 17537,
       "removed": 0,
       "removed_pct": "0.0%"
     },
     {
       "step": "repo_concentration",
-      "remaining": 17624,
+      "remaining": 17537,
       "removed": 0,
       "removed_pct": "0.0%"
     },
     {
-      "step": "dedup_exact",
-      "remaining": 13262,
-      "removed": 4362,
-      "removed_pct": "24.8%"
+      "step": "dedup_minhash",
+      "remaining": 5290,
+      "removed": 12247,
+      "removed_pct": "69.8%"
     }
   ],
   "original_count": 18162,
-  "final_count": 13262,
-  "retention_rate": "73.0%",
+  "final_count": 5290,
+  "retention_rate": "29.1%",
   "token_stats": {
     "prompt": {
-      "mean": 383,
-      "median": 268,
-      "p95": 1057,
-      "max": 4091
+      "mean": 438,
+      "median": 327,
+      "p95": 1141,
+      "max": 3858
     },
     "response": {
-      "mean": 1897,
-      "median": 1473,
-      "p95": 4816,
-      "max": 8185
+      "mean": 2174,
+      "median": 1739,
+      "p95": 5377,
+      "max": 8188
     }
   },
   "synthetic_count": 0,
-  "real_count": 13262,
-  "unique_repos": 6847
+  "real_count": 5290,
+  "unique_repos": 3445
 }
