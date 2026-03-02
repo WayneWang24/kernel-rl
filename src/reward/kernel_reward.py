@@ -318,6 +318,202 @@ def compute_score_full(
     return result
 
 
+# ============================================================
+# ModelNew 格式检查工具
+# ============================================================
+
+def has_modelnew_class(code: str) -> bool:
+    """检查是否包含 class ModelNew(nn.Module)。"""
+    return bool(re.search(r"class\s+ModelNew\s*\(\s*(?:nn\.Module|torch\.nn\.Module)\s*\)", code))
+
+
+def has_nn_module_subclass(code: str, class_name: str = "ModelNew") -> bool:
+    """检查指定类是否继承 nn.Module。"""
+    return bool(re.search(
+        rf"class\s+{class_name}\s*\(\s*(?:nn\.Module|torch\.nn\.Module)\s*\)", code
+    ))
+
+
+def has_custom_forward(code: str) -> bool:
+    """检查 forward 是否不直接调用 self.xxx(input) 的标准 PyTorch op。
+
+    如果 forward 内部使用了 self.<module>(x) 模式（标准调用），则返回 False。
+    如果 forward 使用了 self.<module>.weight 或自定义 kernel 调用，则返回 True。
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return False
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "forward":
+            source_lines = ast.get_source_segment(code, node)
+            if source_lines is None:
+                # 回退到行号范围
+                lines = code.split("\n")
+                start = node.lineno - 1
+                end = node.end_lineno if node.end_lineno else start + 1
+                source_lines = "\n".join(lines[start:end])
+
+            # 检查是否有 self.xxx(input) 标准调用（排除 self.xxx.weight 等属性访问）
+            # 标准调用模式：self.conv(x), self.fc(x), self.bn(x)
+            standard_calls = re.findall(r"self\.\w+\([^)]*\)", source_lines)
+            # 排除 super().__init__() 等
+            standard_calls = [
+                c for c in standard_calls
+                if not re.match(r"self\.\w+\.(weight|bias|parameters|state_dict|named)", c)
+                and "super()" not in c
+            ]
+
+            # 检查是否有自定义 kernel/函数调用
+            has_custom = bool(
+                re.search(r"(triton|tl\.|kernel|custom|_kernel|_fn)\s*[.(]", source_lines)
+                or re.search(r"\w+_kernel\s*\[", source_lines)  # kernel launch: kernel_fn[grid](...)
+            )
+
+            # 如果有大量标准调用且没有自定义调用，认为不是 custom forward
+            if len(standard_calls) > 0 and not has_custom:
+                return False
+            if has_custom:
+                return True
+
+    return False
+
+
+def has_triton_or_cuda_kernel(code: str) -> bool:
+    """检查是否包含 @triton.jit kernel 或 CUDA load_inline。"""
+    return bool(
+        re.search(r"@triton\.(?:jit|autotune)", code)
+        or re.search(r"load_inline\s*\(", code)
+        or re.search(r"torch\.utils\.cpp_extension", code)
+    )
+
+
+def has_init_preserving_structure(code: str) -> bool:
+    """检查 __init__ 是否保留了 nn.Module 层定义（state_dict 兼容）。
+
+    即 __init__ 中有 self.xxx = nn.Xxx(...) 的模式。
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return False
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "__init__":
+            source_lines = ast.get_source_segment(code, node)
+            if source_lines is None:
+                lines = code.split("\n")
+                start = node.lineno - 1
+                end = node.end_lineno if node.end_lineno else start + 1
+                source_lines = "\n".join(lines[start:end])
+
+            # 检查 self.xxx = nn.Xxx(...) 模式
+            return bool(re.search(r"self\.\w+\s*=\s*nn\.\w+\(", source_lines))
+
+    return False
+
+
+# ============================================================
+# ModelNew 格式 Reward（训练用）
+# ============================================================
+
+def compute_score_modelnew(
+    data_source: str,
+    solution_str: str,
+    ground_truth,
+    extra_info: Optional[dict] = None,
+    **kwargs,
+) -> float:
+    """
+    ModelNew 格式 reward（训练时用）。纯静态分析。
+
+    分层策略：
+        R0 = 0.0 : 无代码块
+        R1 = 0.1 : 有代码但语法错误
+        R2 = 0.2 : 语法正确但无 ModelNew 类
+        R3 = 0.3 : 有 ModelNew 但非 nn.Module 子类
+        R4 = 0.5 : ModelNew(nn.Module) 但无 Triton/CUDA kernel
+        R5 = 0.6 : 有 kernel 但 forward 仍用标准 op
+        R6 = 0.8 : 有 kernel + forward 使用自定义计算
+        bonus +0.1 : 性能优化（autotune / BLOCK_SIZE）
+        bonus +0.1 : __init__ 保留 nn.Module 结构（state_dict 兼容）
+
+    Args:
+        data_source: 数据源标识
+        solution_str: 模型生成的完整文本
+        ground_truth: dict with task_id, level, ref_filepath, model_code
+        extra_info: 额外信息
+
+    Returns:
+        float: 0.0 ~ 1.0 的分层 reward
+    """
+    # R0: 无代码块
+    code = extract_code_block(solution_str)
+    if code is None:
+        return 0.0
+
+    # R1: 语法错误
+    if not check_syntax(code):
+        return 0.1
+
+    # R2: 无 ModelNew 类
+    if not re.search(r"class\s+ModelNew", code):
+        return 0.2
+
+    # R3: ModelNew 不是 nn.Module 子类
+    if not has_modelnew_class(code):
+        return 0.3
+
+    # R4: 无 Triton/CUDA kernel
+    if not has_triton_or_cuda_kernel(code):
+        return 0.5
+
+    # R5: 有 kernel 但 forward 仍用标准 op
+    if not has_custom_forward(code):
+        return 0.6
+
+    # R6: 完整的 ModelNew + kernel + custom forward
+    score = 0.8
+
+    # Bonus: 性能优化
+    if has_performance_optimization(code):
+        score += 0.1
+
+    # Bonus: __init__ 保留 nn.Module 结构
+    if has_init_preserving_structure(code):
+        score += 0.1
+
+    return min(score, 1.0)
+
+
+# ============================================================
+# 路由函数：自动选择 reward 模式
+# ============================================================
+
+def compute_score_auto(
+    data_source: str,
+    solution_str: str,
+    ground_truth,
+    extra_info: Optional[dict] = None,
+    **kwargs,
+) -> float:
+    """
+    自动路由 reward 函数。
+
+    根据 ground_truth 格式自动选择：
+    - dict with "task_id" → compute_score_modelnew（KernelBench 任务）
+    - str → compute_score（KernelBook 原始格式）
+    """
+    if isinstance(ground_truth, dict) and "task_id" in ground_truth:
+        return compute_score_modelnew(
+            data_source, solution_str, ground_truth, extra_info, **kwargs
+        )
+    return compute_score(
+        data_source, solution_str, ground_truth, extra_info, **kwargs
+    )
+
+
 def _build_verify_script(generated_code: str, reference_code: str) -> str:
     """构建正确性验证脚本。"""
     return f'''
