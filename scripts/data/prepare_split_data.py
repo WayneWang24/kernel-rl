@@ -165,11 +165,11 @@ def split_by_repo_scheme_c(
         return {"sft": sft_idx, "rl": rl_idx}
 
     repo_stats = df.groupby("repo_name").agg(
-        count=("python_code", "len"),
+        count=("python_code", "size"),
         modelnew_rate=("modelnew_convertible", "mean"),
         mean_complexity=("complexity_score", "mean"),
         mean_quality=("quality_score", "mean"),
-        mean_stars=("stars", lambda x: x.mean() if "stars" in df.columns else 0),
+        mean_stars=("stars", "mean"),
     ).reset_index()
 
     # 给 repo 打分：SFT 优先度 vs RL 优先度
