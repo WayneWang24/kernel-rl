@@ -18,8 +18,13 @@ set -euxo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-# 数据路径（优先使用 KernelBench RL 数据，回退到 KernelBook RL 数据）
-if [ -f "${PROJECT_DIR}/data/rl_kernelbench/train.parquet" ]; then
+# 数据路径（优先使用新的 split 数据，回退到 KernelBench / KernelBook）
+if [ -f "${PROJECT_DIR}/data/split/rl/train.parquet" ]; then
+    TRAIN_PATH="${PROJECT_DIR}/data/split/rl/train.parquet"
+    VAL_PATH="${PROJECT_DIR}/data/split/rl/val.parquet"
+    REWARD_FN_NAME="compute_score_auto"
+    echo "Using KernelBook split RL data (ModelNew format)"
+elif [ -f "${PROJECT_DIR}/data/rl_kernelbench/train.parquet" ]; then
     TRAIN_PATH="${PROJECT_DIR}/data/rl_kernelbench/train.parquet"
     VAL_PATH="${PROJECT_DIR}/data/rl_kernelbench/val.parquet"
     REWARD_FN_NAME="compute_score_auto"

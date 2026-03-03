@@ -80,21 +80,15 @@ run_step() {
 
 # ======== Step 1: 数据准备 ========
 if run_step 1 "Data Preparation"; then
-    echo "--- 1a: Prepare SFT data (ModelNew format) ---"
-    python "${PROJECT_DIR}/scripts/data/prepare_sft_modelnew.py" \
-        --input "${PROJECT_DIR}/data/cleaned/kernelbook_clean.parquet" \
-        --output_dir "${PROJECT_DIR}/data/sft_modelnew"
-
-    echo ""
-    echo "--- 1b: Prepare RL data (KernelBench tasks) ---"
-    python "${PROJECT_DIR}/scripts/data/prepare_rl_kernelbench.py" \
-        --kernelbench_dir "$KERNELBENCH_DIR" \
-        --output_dir "${PROJECT_DIR}/data/rl_kernelbench"
+    echo "--- Split KernelBook into SFT + RL (Scheme C) ---"
+    python "${PROJECT_DIR}/scripts/data/prepare_split_data.py" \
+        --input "${PROJECT_DIR}/data/raw/kernelbook_raw.parquet" \
+        --output_dir "${PROJECT_DIR}/data/split"
 
     echo ""
     echo "Step 1 complete. Data ready at:"
-    echo "  SFT: data/sft_modelnew/{train,val,test}.parquet"
-    echo "  RL:  data/rl_kernelbench/{train,val,test}.parquet"
+    echo "  SFT: data/split/sft/{train,val}.parquet"
+    echo "  RL:  data/split/rl/{train,val}.parquet"
 fi
 
 # ======== Step 2: Baseline 评测 ========
@@ -109,9 +103,9 @@ fi
 
 # ======== Step 3: SFT 训练 ========
 if run_step 3 "SFT Training (ModelNew)"; then
-    # 使用 ModelNew 格式数据
-    TRAIN_PATH="${PROJECT_DIR}/data/sft_modelnew/train.parquet"
-    VAL_PATH="${PROJECT_DIR}/data/sft_modelnew/val.parquet"
+    # 使用 split 数据
+    TRAIN_PATH="${PROJECT_DIR}/data/split/sft/train.parquet"
+    VAL_PATH="${PROJECT_DIR}/data/split/sft/val.parquet"
 
     if [ ! -f "$TRAIN_PATH" ]; then
         echo "ERROR: SFT data not found. Run step 1 first."

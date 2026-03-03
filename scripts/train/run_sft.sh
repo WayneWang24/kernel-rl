@@ -19,9 +19,20 @@ set -euxo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-# 数据路径
-TRAIN_PATH="${PROJECT_DIR}/data/sft/train.parquet"
-VAL_PATH="${PROJECT_DIR}/data/sft/val.parquet"
+# 数据路径（优先使用新的 split 数据，回退到旧路径）
+if [ -f "${PROJECT_DIR}/data/split/sft/train.parquet" ]; then
+    TRAIN_PATH="${PROJECT_DIR}/data/split/sft/train.parquet"
+    VAL_PATH="${PROJECT_DIR}/data/split/sft/val.parquet"
+    echo "Using split SFT data"
+elif [ -f "${PROJECT_DIR}/data/sft_modelnew/train.parquet" ]; then
+    TRAIN_PATH="${PROJECT_DIR}/data/sft_modelnew/train.parquet"
+    VAL_PATH="${PROJECT_DIR}/data/sft_modelnew/val.parquet"
+    echo "Using ModelNew SFT data"
+else
+    TRAIN_PATH="${PROJECT_DIR}/data/sft/train.parquet"
+    VAL_PATH="${PROJECT_DIR}/data/sft/val.parquet"
+    echo "Using original SFT data"
+fi
 
 # 模型
 MODEL_PATH="${MODEL_PATH:-Qwen/Qwen2.5-Coder-7B-Instruct}"
@@ -32,7 +43,7 @@ CHECKPOINT_DIR="${PROJECT_DIR}/checkpoints/sft"
 # 检查数据
 if [ ! -f "$TRAIN_PATH" ]; then
     echo "ERROR: Training data not found at $TRAIN_PATH"
-    echo "Please run: python scripts/data/prepare_sft_data.py first"
+    echo "Please run: python scripts/data/prepare_split_data.py first"
     exit 1
 fi
 

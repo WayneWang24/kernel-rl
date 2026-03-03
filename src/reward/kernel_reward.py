@@ -503,12 +503,26 @@ def compute_score_auto(
 
     根据 ground_truth 格式自动选择：
     - dict with "task_id" → compute_score_modelnew（KernelBench 任务）
+    - dict with "format"="modelnew" → compute_score_modelnew（KernelBook ModelNew 格式）
+    - dict with "format"="original" → compute_score（KernelBook 原始格式）
     - str → compute_score（KernelBook 原始格式）
     """
-    if isinstance(ground_truth, dict) and "task_id" in ground_truth:
-        return compute_score_modelnew(
-            data_source, solution_str, ground_truth, extra_info, **kwargs
-        )
+    if isinstance(ground_truth, dict):
+        if "task_id" in ground_truth:
+            # KernelBench 任务
+            return compute_score_modelnew(
+                data_source, solution_str, ground_truth, extra_info, **kwargs
+            )
+        if ground_truth.get("format") == "modelnew":
+            # KernelBook ModelNew 格式 RL 数据
+            return compute_score_modelnew(
+                data_source, solution_str, ground_truth, extra_info, **kwargs
+            )
+        if "triton_code" in ground_truth:
+            # KernelBook 原始格式 RL 数据，用 triton_code 作为 ground_truth
+            return compute_score(
+                data_source, solution_str, ground_truth["triton_code"], extra_info, **kwargs
+            )
     return compute_score(
         data_source, solution_str, ground_truth, extra_info, **kwargs
     )

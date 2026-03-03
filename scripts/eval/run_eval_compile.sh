@@ -35,7 +35,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # 参数
 MODEL_PATH="${1:?Usage: $0 <model_path|SKIP> <run_name> [levels]}"
 RUN_NAME="${2:?Usage: $0 <model_path|SKIP> <run_name> [levels]}"
-LEVELS="${3:-1 2 3 4}"
+LEVELS="${3:-1 2 3 4}"  # Default: all levels (completely held-out evaluation)
 
 # 配置
 KERNELBENCH_DIR="${KERNELBENCH_DIR:-$HOME/Code/my-kernel-bench}"
