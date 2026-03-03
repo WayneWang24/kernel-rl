@@ -36,8 +36,9 @@ import pandas as pd
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 sys.path.insert(0, PROJECT_DIR)
+sys.path.insert(0, SCRIPT_DIR)
 
-from scripts.data.prepare_sft_modelnew import (
+from prepare_sft_modelnew import (
     MODELNEW_PROMPT_TEMPLATE,
     ORIGINAL_PROMPT_TEMPLATE,
     try_convert_to_modelnew,
