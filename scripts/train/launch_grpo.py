@@ -110,6 +110,66 @@ def ensure_clean_verl_reward():
 
 
 # ============================================================
+# Step 0b: 补丁 verl 的 fsdp_workers.py
+#
+# verl 0.7.0 在 rollout_mode() 中没有在 vLLM resume 前调用
+# torch.cuda.empty_cache()，导致训练后 PyTorch 缓存分配器
+# 仍占用大量 GPU 内存，vLLM 的 cumem 分配器无法回收。
+# 新版 verl 已修复（aggressive_empty_cache），我们给 0.7.0 补上。
+# ============================================================
+EMPTY_CACHE_PATCH_MARKER = "# [kernel-rl-empty-cache-patch]"
+
+
+def clean_verl_empty_cache():
+    """移除之前的 empty_cache 补丁。"""
+    import verl.workers.fsdp_workers as mod
+
+    fpath = mod.__file__
+    with open(fpath) as f:
+        lines = f.readlines()
+    if not any(EMPTY_CACHE_PATCH_MARKER in l for l in lines):
+        return
+    clean = [l for l in lines if EMPTY_CACHE_PATCH_MARKER not in l]
+    with open(fpath, "w") as f:
+        f.writelines(clean)
+    print(f"[patch] Cleaned empty_cache patch from {fpath}")
+
+
+def patch_verl_empty_cache():
+    """在 fsdp_workers.py 的每个 rollout.resume() 前注入 empty_cache。"""
+    import verl.workers.fsdp_workers as mod
+
+    fpath = mod.__file__
+    with open(fpath) as f:
+        lines = f.readlines()
+
+    if any(EMPTY_CACHE_PATCH_MARKER in l for l in lines):
+        print("[patch] fsdp_workers empty_cache already patched")
+        return
+
+    if not any("self.rollout.resume" in l for l in lines):
+        print(f"[patch] WARNING: no rollout.resume in {fpath}, skipping")
+        return
+
+    new_lines = []
+    patched_count = 0
+    for line in lines:
+        if "self.rollout.resume" in line and "await" in line:
+            indent = len(line) - len(line.lstrip())
+            s = " " * indent
+            new_lines.append(
+                f"{s}import gc; gc.collect(); import torch; torch.cuda.empty_cache()  "
+                f"{EMPTY_CACHE_PATCH_MARKER}\n"
+            )
+            patched_count += 1
+        new_lines.append(line)
+
+    with open(fpath, "w") as f:
+        f.writelines(new_lines)
+    print(f"[patch] Patched fsdp_workers.py: {patched_count} empty_cache calls added ({fpath})")
+
+
+# ============================================================
 # Step 1: 数据路径（自动探测）
 # ============================================================
 if os.path.isfile(f"{PROJECT_DIR}/data/split/rl/train.parquet"):
@@ -155,6 +215,10 @@ if not os.path.isfile(train_path):
 ensure_clean_verl_reward()
 patch_verl_reward()
 
+# 补丁 fsdp_workers：在 vLLM resume 前清理 GPU 缓存
+clean_verl_empty_cache()
+patch_verl_empty_cache()
+
 # ============================================================
 # Step 5: 构建 Hydra overrides 并启动
 # ============================================================
@@ -176,14 +240,14 @@ overrides = [
     "actor_rollout_ref.actor.entropy_coeff=0",
     "actor_rollout_ref.model.enable_gradient_checkpointing=true",
     "+actor_rollout_ref.model.override_config.attn_implementation=sdpa",
-    "actor_rollout_ref.actor.fsdp_config.param_offload=true",
+    "actor_rollout_ref.actor.fsdp_config.param_offload=false",
     "actor_rollout_ref.actor.fsdp_config.optimizer_offload=false",
     # 禁用 Adam foreach 优化，避免 _foreach_sqrt 产生 ~14GB 临时内存峰值
     "+actor_rollout_ref.actor.optim.override_optimizer_config.foreach=false",
     "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1",
     "actor_rollout_ref.rollout.tensor_model_parallel_size=1",
     "actor_rollout_ref.rollout.name=vllm",
-    "actor_rollout_ref.rollout.gpu_memory_utilization=0.25",
+    "actor_rollout_ref.rollout.gpu_memory_utilization=0.30",
     "actor_rollout_ref.rollout.max_model_len=6144",
     "actor_rollout_ref.rollout.n=3",
     # ref model 已禁用（use_kl_loss=false + use_kl_in_reward=false）
