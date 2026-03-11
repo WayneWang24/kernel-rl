@@ -71,7 +71,7 @@ python3 -m verl.trainer.main_ppo \
     data.filter_overlong_prompts=true \
     data.truncation=error \
     actor_rollout_ref.model.path="$MODEL_PATH" \
-    actor_rollout_ref.actor.optim.lr=5e-7 \
+    actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=false \
     actor_rollout_ref.actor.ppo_mini_batch_size=8 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
@@ -100,7 +100,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.nnodes=1 \
     trainer.save_freq=10 \
     trainer.test_freq=5 \
-    trainer.total_epochs=20 \
+    trainer.total_epochs=3 \
     "$@"
 
 echo "=== GRPO Training Complete ==="
