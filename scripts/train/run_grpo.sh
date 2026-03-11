@@ -67,7 +67,7 @@ python3 -m verl.trainer.main_ppo \
     data.val_files="$VAL_PATH" \
     data.train_batch_size=16 \
     data.max_prompt_length=4096 \
-    data.max_response_length=8192 \
+    data.max_response_length=4096 \
     data.filter_overlong_prompts=true \
     data.truncation=error \
     actor_rollout_ref.model.path="$MODEL_PATH" \
