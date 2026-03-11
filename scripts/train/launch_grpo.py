@@ -13,6 +13,9 @@ import sys
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 REWARD_FN_PATH = os.path.join(PROJECT_DIR, "src", "reward", "kernel_reward.py")
 
+# 确保不设置 expandable_segments（与 vLLM memory pool 不兼容）
+os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
+
 
 # ============================================================
 # Step 0: 补丁 verl 的 default_compute_score 以支持 kernelbook
