@@ -13,9 +13,6 @@ import sys
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 REWARD_FN_PATH = os.path.join(PROJECT_DIR, "src", "reward", "kernel_reward.py")
 
-# 减少 CUDA 内存碎片
-os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-
 
 # ============================================================
 # Step 0: 补丁 verl 的 default_compute_score 以支持 kernelbook
