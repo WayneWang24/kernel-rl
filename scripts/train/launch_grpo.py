@@ -13,6 +13,9 @@ import sys
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 REWARD_FN_PATH = os.path.join(PROJECT_DIR, "src", "reward", "kernel_reward.py")
 
+# 减少 CUDA 内存碎片
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 
 # ============================================================
 # Step 0: 补丁 verl 的 default_compute_score 以支持 kernelbook
@@ -178,7 +181,7 @@ overrides = [
     "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1",
     "actor_rollout_ref.rollout.tensor_model_parallel_size=1",
     "actor_rollout_ref.rollout.name=vllm",
-    "actor_rollout_ref.rollout.gpu_memory_utilization=0.30",
+    "actor_rollout_ref.rollout.gpu_memory_utilization=0.25",
     "actor_rollout_ref.rollout.max_model_len=6144",
     "actor_rollout_ref.rollout.n=3",
     # ref model 已禁用（use_kl_loss=false + use_kl_in_reward=false）
