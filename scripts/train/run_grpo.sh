@@ -81,10 +81,11 @@ python3 -m verl.trainer.main_ppo \
     +actor_rollout_ref.model.override_config.attn_implementation=sdpa \
     actor_rollout_ref.actor.fsdp_config.param_offload=false \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=false \
+    +actor_rollout_ref.actor.optim.override_optimizer_config.foreach=false \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.25 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.30 \
     actor_rollout_ref.rollout.max_model_len=6144 \
     actor_rollout_ref.rollout.n=3 \
     algorithm.use_kl_in_reward=false \
