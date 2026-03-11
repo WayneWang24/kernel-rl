@@ -66,7 +66,7 @@ python3 -m verl.trainer.main_ppo \
     data.train_files="$TRAIN_PATH" \
     data.val_files="$VAL_PATH" \
     data.train_batch_size=8 \
-    data.max_prompt_length=4096 \
+    data.max_prompt_length=2048 \
     data.max_response_length=4096 \
     data.filter_overlong_prompts=true \
     data.truncation=error \
@@ -81,7 +81,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.entropy_coeff=0 \
     actor_rollout_ref.model.enable_gradient_checkpointing=true \
     +actor_rollout_ref.model.override_config.attn_implementation=sdpa \
-    actor_rollout_ref.actor.fsdp_config.param_offload=false \
+    actor_rollout_ref.actor.fsdp_config.param_offload=true \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=true \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
