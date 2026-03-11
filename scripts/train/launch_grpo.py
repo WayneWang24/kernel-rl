@@ -174,6 +174,7 @@ overrides = [
     "actor_rollout_ref.actor.kl_loss_type=low_var_kl",
     "actor_rollout_ref.actor.entropy_coeff=0",
     "actor_rollout_ref.model.enable_gradient_checkpointing=true",
+    "+actor_rollout_ref.model.override_config.attn_implementation=sdpa",
     "actor_rollout_ref.actor.fsdp_config.param_offload=false",
     "actor_rollout_ref.actor.fsdp_config.optimizer_offload=false",
     "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=4",
