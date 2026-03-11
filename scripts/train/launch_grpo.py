@@ -199,7 +199,7 @@ for ckpt in ["checkpoints/sft_modelnew_merged", "checkpoints/sft_merged"]:
         print(f"Using SFT checkpoint: {model_path}")
         break
 if model_path is None:
-    model_path = os.environ.get("MODEL_PATH", "Qwen/Qwen2.5-Coder-7B-Instruct")
+    model_path = os.environ.get("MODEL_PATH", "Qwen/Qwen2.5-Coder-3B-Instruct")
     print(f"WARNING: SFT checkpoint not found, using base model: {model_path}")
 
 # ============================================================
@@ -257,7 +257,7 @@ overrides = [
     "trainer.critic_warmup=0",
     'trainer.logger=["console"]',
     "trainer.project_name=kernel_rl",
-    "trainer.experiment_name=grpo_qwen25_coder_7b_modelnew",
+    "trainer.experiment_name=grpo_qwen25_coder_3b",
     f"trainer.default_local_dir={PROJECT_DIR}/checkpoints/grpo",
     "trainer.n_gpus_per_node=2",
     "trainer.nnodes=1",

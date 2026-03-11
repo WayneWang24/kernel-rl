@@ -47,7 +47,7 @@ if [ -d "$SFT_CHECKPOINT" ]; then
     MODEL_PATH="$SFT_CHECKPOINT"
     echo "Using SFT checkpoint: $MODEL_PATH"
 else
-    MODEL_PATH="${MODEL_PATH:-Qwen/Qwen2.5-Coder-7B-Instruct}"
+    MODEL_PATH="${MODEL_PATH:-Qwen/Qwen2.5-Coder-3B-Instruct}"
     echo "WARNING: SFT checkpoint not found, using base model: $MODEL_PATH"
 fi
 
@@ -94,7 +94,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.critic_warmup=0 \
     trainer.logger='["console"]' \
     trainer.project_name=kernel_rl \
-    trainer.experiment_name=grpo_qwen25_coder_7b_modelnew \
+    trainer.experiment_name=grpo_qwen25_coder_3b \
     trainer.default_local_dir="${PROJECT_DIR}/checkpoints/grpo" \
     trainer.n_gpus_per_node=2 \
     trainer.nnodes=1 \
