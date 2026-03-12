@@ -261,8 +261,8 @@ overrides = [
     f"trainer.default_local_dir={PROJECT_DIR}/checkpoints/grpo",
     "trainer.n_gpus_per_node=2",
     "trainer.nnodes=1",
-    "trainer.save_freq=10",
-    "trainer.test_freq=5",
+    "trainer.save_freq=200",
+    "trainer.test_freq=200",
     "trainer.total_epochs=3",
 ]
 
