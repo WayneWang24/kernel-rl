@@ -170,6 +170,146 @@ def patch_verl_empty_cache():
 
 
 # ============================================================
+# Step 0c: 补丁 checkpoint 加载，容忍缺失/损坏的 optimizer state
+#
+# 如果 checkpoint 的 optimizer state 因磁盘满等原因损坏，
+# verl 0.7.0 会直接 crash。我们给 fsdp_checkpoint_manager.py
+# 的 torch.load(optim) 加上 try-except，让它跳过损坏的文件。
+# ============================================================
+OPTIM_PATCH_MARKER = "# [kernel-rl-optim-tolerant-patch]"
+
+
+def clean_verl_optim_patch():
+    """移除之前的 optimizer 容错补丁。"""
+    import verl.utils.checkpoint.fsdp_checkpoint_manager as mod
+
+    fpath = mod.__file__
+    with open(fpath) as f:
+        lines = f.readlines()
+    if not any(OPTIM_PATCH_MARKER in l for l in lines):
+        return
+    clean = [l for l in lines if OPTIM_PATCH_MARKER not in l]
+    with open(fpath, "w") as f:
+        f.writelines(clean)
+    print(f"[patch] Cleaned optim-tolerant patch from {fpath}")
+
+
+def patch_verl_optim_tolerant():
+    """给 optimizer state 加载加上 try-except 容错。"""
+    import verl.utils.checkpoint.fsdp_checkpoint_manager as mod
+
+    fpath = mod.__file__
+    with open(fpath) as f:
+        content = f.read()
+
+    if OPTIM_PATCH_MARKER in content:
+        print("[patch] fsdp_checkpoint_manager optim-tolerant already patched")
+        return
+
+    # 找 optimizer_state_dict = torch.load(...) 这行
+    # 在它前面加 try，在 self.optimizer.load_state_dict 后面加 except
+    if "optimizer_state_dict = torch.load" not in content:
+        print(f"[patch] WARNING: cannot find optimizer torch.load in {fpath}")
+        return
+
+    lines = content.split("\n")
+    new_lines = []
+    i = 0
+    patched = False
+    while i < len(lines):
+        line = lines[i]
+        if not patched and "optimizer_state_dict = torch.load" in line:
+            indent = len(line) - len(line.lstrip())
+            s = " " * indent
+            # 插入 try
+            new_lines.append(f"{s}try:  {OPTIM_PATCH_MARKER}")
+            # 缩进后续 optimizer 相关行
+            new_lines.append(f"  {line}")
+            i += 1
+            # 继续缩进直到遇到 load_state_dict
+            while i < len(lines):
+                line2 = lines[i]
+                new_lines.append(f"  {line2}")
+                if "load_state_dict" in line2 and "optimizer" in line2.lower():
+                    i += 1
+                    break
+                i += 1
+            # 插入 except
+            new_lines.append(
+                f'{s}except Exception as _e:  {OPTIM_PATCH_MARKER}'
+            )
+            new_lines.append(
+                f'{s}    print(f"[kernel-rl] WARNING: Failed to load optimizer state: {{_e}}")  '
+                f"{OPTIM_PATCH_MARKER}"
+            )
+            new_lines.append(
+                f'{s}    print("[kernel-rl] Continuing with fresh optimizer state")  '
+                f"{OPTIM_PATCH_MARKER}"
+            )
+            patched = True
+        else:
+            new_lines.append(line)
+            i += 1
+
+    if patched:
+        with open(fpath, "w") as f:
+            f.write("\n".join(new_lines))
+        print(f"[patch] Patched fsdp_checkpoint_manager.py with optim-tolerant loading ({fpath})")
+    else:
+        print(f"[patch] WARNING: could not patch optimizer loading in {fpath}")
+
+
+# ============================================================
+# Step 0d: 准备 checkpoint resume
+#
+# 如果存在部分保存的 checkpoint（模型权重有但 optimizer 损坏），
+# 清理损坏文件并写入 tracker 文件让 verl 的 auto-resume 能找到它。
+# ============================================================
+def prepare_checkpoint_resume(ckpt_dir):
+    """检查并修复部分保存的 checkpoint。"""
+    import glob
+
+    if not os.path.isdir(ckpt_dir):
+        return
+
+    # 找到最新的 global_step_* 目录
+    step_dirs = sorted(glob.glob(os.path.join(ckpt_dir, "global_step_*")))
+    if not step_dirs:
+        return
+
+    latest = step_dirs[-1]
+    step_num = latest.split("global_step_")[-1]
+    actor_dir = os.path.join(latest, "actor")
+
+    if not os.path.isdir(actor_dir):
+        return
+
+    # 检查模型权重是否存在
+    model_files = glob.glob(os.path.join(actor_dir, "model_world_size_*.pt"))
+    if not model_files:
+        print(f"[resume] No model weights in {latest}, skipping")
+        return
+
+    # 删除可能损坏的 optimizer 和 extra_state 文件（大小异常小 = 损坏）
+    for pattern in ["optim_world_size_*.pt", "extra_state_world_size_*.pt"]:
+        for f in glob.glob(os.path.join(actor_dir, pattern)):
+            try:
+                size_mb = os.path.getsize(f) / (1024 * 1024)
+                # optimizer state 应该 > 100MB，否则可能损坏
+                if size_mb < 10:
+                    print(f"[resume] Removing likely corrupted file: {f} ({size_mb:.1f}MB)")
+                    os.remove(f)
+            except OSError:
+                pass
+
+    # 写入 tracker 文件让 auto-resume 能找到
+    tracker = os.path.join(ckpt_dir, "latest_checkpointed_iteration.txt")
+    with open(tracker, "w") as f:
+        f.write(step_num)
+    print(f"[resume] Will resume from global_step_{step_num} (model weights only)")
+
+
+# ============================================================
 # Step 1: 数据路径（自动探测）
 # ============================================================
 if os.path.isfile(f"{PROJECT_DIR}/data/split/rl/train.parquet"):
@@ -218,6 +358,13 @@ patch_verl_reward()
 # 补丁 fsdp_workers：在 vLLM resume 前清理 GPU 缓存
 clean_verl_empty_cache()
 patch_verl_empty_cache()
+
+# 补丁 checkpoint 加载：容忍损坏的 optimizer state
+clean_verl_optim_patch()
+patch_verl_optim_tolerant()
+
+# 修复部分保存的 checkpoint（删除损坏文件，写入 tracker）
+prepare_checkpoint_resume(os.path.join(PROJECT_DIR, "checkpoints", "grpo"))
 
 # ============================================================
 # Step 5: 构建 Hydra overrides 并启动
