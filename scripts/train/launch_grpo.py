@@ -310,117 +310,118 @@ def prepare_checkpoint_resume(ckpt_dir):
 
 
 # ============================================================
-# Step 1: 数据路径（自动探测）
+# 公共辅助：应用所有补丁
 # ============================================================
-if os.path.isfile(f"{PROJECT_DIR}/data/split/rl/train.parquet"):
-    train_path = f"{PROJECT_DIR}/data/split/rl/train.parquet"
-    val_path = f"{PROJECT_DIR}/data/split/rl/val.parquet"
-    reward_fn_name = "compute_score_auto"
-    print("Using KernelBook split RL data (ModelNew format)")
-elif os.path.isfile(f"{PROJECT_DIR}/data/rl_kernelbench/train.parquet"):
-    train_path = f"{PROJECT_DIR}/data/rl_kernelbench/train.parquet"
-    val_path = f"{PROJECT_DIR}/data/rl_kernelbench/val.parquet"
-    reward_fn_name = "compute_score_auto"
-    print("Using KernelBench RL data (ModelNew format)")
-else:
-    train_path = f"{PROJECT_DIR}/data/rl/train.parquet"
-    val_path = f"{PROJECT_DIR}/data/rl/val.parquet"
-    reward_fn_name = "compute_score"
-    print("Using KernelBook RL data (original format)")
+def apply_all_patches(project_dir=PROJECT_DIR):
+    """应用所有 verl 补丁。可被 SLURM 脚本直接调用。"""
+    ensure_clean_verl_reward()
+    patch_verl_reward()
+    clean_verl_empty_cache()
+    patch_verl_empty_cache()
+    clean_verl_optim_patch()
+    patch_verl_optim_tolerant()
+    prepare_checkpoint_resume(os.path.join(project_dir, "checkpoints", "grpo"))
+    print("[patches] All patches applied successfully")
+
 
 # ============================================================
-# Step 2: 模型路径（自动探测）
+# Main: 数据探测 + 补丁 + 启动训练
 # ============================================================
-model_path = None
-for ckpt in ["checkpoints/sft_modelnew_merged", "checkpoints/sft_merged"]:
-    full = os.path.join(PROJECT_DIR, ckpt)
-    if os.path.isdir(full):
-        model_path = full
-        print(f"Using SFT checkpoint: {model_path}")
-        break
-if model_path is None:
-    model_path = os.environ.get("MODEL_PATH", "Qwen/Qwen2.5-Coder-3B-Instruct")
-    print(f"WARNING: SFT checkpoint not found, using base model: {model_path}")
+def main():
+    # Step 1: 数据路径
+    if os.path.isfile(f"{PROJECT_DIR}/data/split/rl/train.parquet"):
+        train_path = f"{PROJECT_DIR}/data/split/rl/train.parquet"
+        val_path = f"{PROJECT_DIR}/data/split/rl/val.parquet"
+        reward_fn_name = "compute_score_auto"
+        print("Using KernelBook split RL data (ModelNew format)")
+    elif os.path.isfile(f"{PROJECT_DIR}/data/rl_kernelbench/train.parquet"):
+        train_path = f"{PROJECT_DIR}/data/rl_kernelbench/train.parquet"
+        val_path = f"{PROJECT_DIR}/data/rl_kernelbench/val.parquet"
+        reward_fn_name = "compute_score_auto"
+        print("Using KernelBench RL data (ModelNew format)")
+    else:
+        train_path = f"{PROJECT_DIR}/data/rl/train.parquet"
+        val_path = f"{PROJECT_DIR}/data/rl/val.parquet"
+        reward_fn_name = "compute_score"
+        print("Using KernelBook RL data (original format)")
 
-# ============================================================
-# Step 3: 检查数据
-# ============================================================
-if not os.path.isfile(train_path):
-    print(f"ERROR: RL training data not found at {train_path}")
-    sys.exit(1)
+    # Step 2: 模型路径
+    model_path = None
+    for ckpt in ["checkpoints/sft_modelnew_merged", "checkpoints/sft_merged"]:
+        full = os.path.join(PROJECT_DIR, ckpt)
+        if os.path.isdir(full):
+            model_path = full
+            print(f"Using SFT checkpoint: {model_path}")
+            break
+    if model_path is None:
+        model_path = os.environ.get("MODEL_PATH", "Qwen/Qwen2.5-Coder-3B-Instruct")
+        print(f"WARNING: SFT checkpoint not found, using base model: {model_path}")
 
-# ============================================================
-# Step 4: 补丁 verl reward
-# ============================================================
-ensure_clean_verl_reward()
-patch_verl_reward()
+    # Step 3: 检查数据
+    if not os.path.isfile(train_path):
+        print(f"ERROR: RL training data not found at {train_path}")
+        sys.exit(1)
 
-# 补丁 fsdp_workers：在 vLLM resume 前清理 GPU 缓存
-clean_verl_empty_cache()
-patch_verl_empty_cache()
+    # Step 4: 补丁
+    apply_all_patches()
 
-# 补丁 checkpoint 加载：容忍损坏的 optimizer state
-clean_verl_optim_patch()
-patch_verl_optim_tolerant()
+    # Step 5: 构建 Hydra overrides 并启动
+    overrides = [
+        "algorithm.adv_estimator=grpo",
+        f"data.train_files={train_path}",
+        f"data.val_files={val_path}",
+        "data.train_batch_size=8",
+        "data.max_prompt_length=2048",
+        "data.max_response_length=4096",
+        "data.filter_overlong_prompts=true",
+        "data.truncation=error",
+        f"actor_rollout_ref.model.path={model_path}",
+        "actor_rollout_ref.actor.optim.lr=1e-6",
+        "actor_rollout_ref.model.use_remove_padding=false",
+        "actor_rollout_ref.actor.ppo_mini_batch_size=8",
+        "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1",
+        "actor_rollout_ref.actor.use_kl_loss=false",
+        "actor_rollout_ref.actor.entropy_coeff=0",
+        "actor_rollout_ref.model.enable_gradient_checkpointing=true",
+        "+actor_rollout_ref.model.override_config.attn_implementation=sdpa",
+        "actor_rollout_ref.actor.fsdp_config.param_offload=false",
+        "actor_rollout_ref.actor.fsdp_config.optimizer_offload=false",
+        # 禁用 Adam foreach 优化，避免 _foreach_sqrt 产生 ~14GB 临时内存峰值
+        "+actor_rollout_ref.actor.optim.override_optimizer_config.foreach=false",
+        "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1",
+        "actor_rollout_ref.rollout.tensor_model_parallel_size=1",
+        "actor_rollout_ref.rollout.name=vllm",
+        "actor_rollout_ref.rollout.gpu_memory_utilization=0.30",
+        "actor_rollout_ref.rollout.max_model_len=6144",
+        "actor_rollout_ref.rollout.n=3",
+        # ref model 已禁用（use_kl_loss=false + use_kl_in_reward=false）
+        "algorithm.use_kl_in_reward=false",
+        f"+reward.custom_reward_function.path={REWARD_FN_PATH}",
+        f"+reward.custom_reward_function.name={reward_fn_name}",
+        "trainer.critic_warmup=0",
+        'trainer.logger=["console"]',
+        "trainer.project_name=kernel_rl",
+        "trainer.experiment_name=grpo_qwen25_coder_3b",
+        f"trainer.default_local_dir={PROJECT_DIR}/checkpoints/grpo",
+        "trainer.n_gpus_per_node=2",
+        "trainer.nnodes=1",
+        "trainer.save_freq=200",
+        "trainer.test_freq=200",
+        "trainer.max_actor_ckpt_to_keep=1",
+        "trainer.total_epochs=3",
+    ]
 
-# 修复部分保存的 checkpoint（删除损坏文件，写入 tracker）
-prepare_checkpoint_resume(os.path.join(PROJECT_DIR, "checkpoints", "grpo"))
+    # 追加用户额外参数
+    overrides.extend(sys.argv[1:])
 
-# ============================================================
-# Step 5: 构建 Hydra overrides 并启动
-# ============================================================
-overrides = [
-    "algorithm.adv_estimator=grpo",
-    f"data.train_files={train_path}",
-    f"data.val_files={val_path}",
-    "data.train_batch_size=8",
-    "data.max_prompt_length=2048",
-    "data.max_response_length=4096",
-    "data.filter_overlong_prompts=true",
-    "data.truncation=error",
-    f"actor_rollout_ref.model.path={model_path}",
-    "actor_rollout_ref.actor.optim.lr=1e-6",
-    "actor_rollout_ref.model.use_remove_padding=false",
-    "actor_rollout_ref.actor.ppo_mini_batch_size=8",
-    "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1",
-    "actor_rollout_ref.actor.use_kl_loss=false",
-    "actor_rollout_ref.actor.entropy_coeff=0",
-    "actor_rollout_ref.model.enable_gradient_checkpointing=true",
-    "+actor_rollout_ref.model.override_config.attn_implementation=sdpa",
-    "actor_rollout_ref.actor.fsdp_config.param_offload=false",
-    "actor_rollout_ref.actor.fsdp_config.optimizer_offload=false",
-    # 禁用 Adam foreach 优化，避免 _foreach_sqrt 产生 ~14GB 临时内存峰值
-    "+actor_rollout_ref.actor.optim.override_optimizer_config.foreach=false",
-    "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1",
-    "actor_rollout_ref.rollout.tensor_model_parallel_size=1",
-    "actor_rollout_ref.rollout.name=vllm",
-    "actor_rollout_ref.rollout.gpu_memory_utilization=0.30",
-    "actor_rollout_ref.rollout.max_model_len=6144",
-    "actor_rollout_ref.rollout.n=3",
-    # ref model 已禁用（use_kl_loss=false + use_kl_in_reward=false）
-    "algorithm.use_kl_in_reward=false",
-    f"+reward.custom_reward_function.path={REWARD_FN_PATH}",
-    f"+reward.custom_reward_function.name={reward_fn_name}",
-    "trainer.critic_warmup=0",
-    'trainer.logger=["console"]',
-    "trainer.project_name=kernel_rl",
-    "trainer.experiment_name=grpo_qwen25_coder_3b",
-    f"trainer.default_local_dir={PROJECT_DIR}/checkpoints/grpo",
-    "trainer.n_gpus_per_node=2",
-    "trainer.nnodes=1",
-    "trainer.save_freq=200",
-    "trainer.test_freq=200",
-    "trainer.max_actor_ckpt_to_keep=1",
-    "trainer.total_epochs=3",
-]
+    # 启动
+    cmd = [sys.executable, "-m", "verl.trainer.main_ppo"] + overrides
+    print(f"\n=== Launching GRPO Training ===")
+    print(f"Overrides: {len(overrides)} params")
+    print()
 
-# 追加用户额外参数
-overrides.extend(sys.argv[1:])
+    os.execvp(cmd[0], cmd)
 
-# 启动
-cmd = [sys.executable, "-m", "verl.trainer.main_ppo"] + overrides
-print(f"\n=== Launching GRPO Training ===")
-print(f"Overrides: {len(overrides)} params")
-print()
 
-os.execvp(cmd[0], cmd)
+if __name__ == "__main__":
+    main()
