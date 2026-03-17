@@ -110,11 +110,11 @@ echo "Reward:    $REWARD_FN_NAME"
 echo ""
 
 # 单节点不需要手动启动 Ray 集群，verl 会自动 ray.init()
-# 3× A100 40GB 跑 7B 内存计算：
-#   - FSDP actor (bf16): 7B × 2 / 3 ≈ 4.7GB/GPU
-#   - optimizer offload 到 CPU: 0GB/GPU
-#   - vLLM (0.30): ~12GB/GPU
-#   - 总计: ~17GB/GPU → 余量充足
+# 3× A100 40GB 跑 7B 内存计算（rollout phase）：
+#   - FSDP actor shard (bf16): 7B × 2 / 3 ≈ 4.7GB/GPU
+#   - vLLM model (full): ~14GB/GPU
+#   - vLLM KV cache: 0.60 × 40 - 14 ≈ 10GB/GPU
+#   - 总计: ~29GB/GPU → 40GB 内可以
 PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     data.train_files="$TRAIN_PATH" \
@@ -139,9 +139,9 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.30 \
-    actor_rollout_ref.rollout.max_model_len=6144 \
-    actor_rollout_ref.rollout.n=5 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.60 \
+    actor_rollout_ref.rollout.max_model_len=4096 \
+    actor_rollout_ref.rollout.n=3 \
     algorithm.use_kl_in_reward=false \
     custom_reward_function.path="$REWARD_FN_PATH" \
     custom_reward_function.name="$REWARD_FN_NAME" \
