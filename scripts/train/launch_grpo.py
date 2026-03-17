@@ -372,6 +372,53 @@ def patch_verl_dtensor_compat():
 
 
 # ============================================================
+# Step 0f: 补丁 vllm_async_server.py 的 import
+#
+# verl 0.7.0 的 vllm_async_server.py 引用了
+# vllm.v1.engine.utils.CoreEngineProcManager，
+# 但该模块仅在 vLLM 0.8+ 存在。
+# CityU HPC 的 CUDA 驱动(535)最高支持 CUDA 12.2，
+# 无法安装 vLLM 0.8+（需要 PyTorch 2.6+ / CUDA 12.4+）。
+# 我们把该 import 包在 try/except 里，因为正常训练
+# 走的是同步 rollout 路径，不会用到 async server。
+# ============================================================
+ASYNC_IMPORT_PATCH_MARKER = "# [kernel-rl-async-import-compat]"
+
+
+def patch_verl_async_import():
+    """修复 vllm_async_server.py 的 import 兼容问题。"""
+    try:
+        fpath = _find_module_file("verl.workers.rollout.vllm_rollout.vllm_async_server")
+    except ImportError:
+        print("[patch] vllm_async_server.py not found, skipping")
+        return
+
+    with open(fpath) as f:
+        content = f.read()
+
+    if ASYNC_IMPORT_PATCH_MARKER in content:
+        print("[patch] vllm_async_server already patched for import compat")
+        return
+
+    old_import = "from vllm.v1.engine.utils import CoreEngineProcManager"
+    if old_import not in content:
+        print("[patch] vllm_async_server: target import not found, skipping")
+        return
+
+    new_import = (
+        f"try:  {ASYNC_IMPORT_PATCH_MARKER}\n"
+        f"    from vllm.v1.engine.utils import CoreEngineProcManager  {ASYNC_IMPORT_PATCH_MARKER}\n"
+        f"except ImportError:  {ASYNC_IMPORT_PATCH_MARKER}\n"
+        f"    CoreEngineProcManager = None  {ASYNC_IMPORT_PATCH_MARKER}"
+    )
+
+    content = content.replace(old_import, new_import)
+    with open(fpath, "w") as f:
+        f.write(content)
+    print(f"[patch] Patched vllm_async_server.py for vLLM 0.7.x compat ({fpath})")
+
+
+# ============================================================
 # 公共辅助：应用所有补丁
 # ============================================================
 def apply_all_patches(project_dir=PROJECT_DIR, optim_tolerant=False):
@@ -381,6 +428,7 @@ def apply_all_patches(project_dir=PROJECT_DIR, optim_tolerant=False):
         optim_tolerant: 是否打 optimizer 容错补丁（仅在从损坏 checkpoint 恢复时需要）
     """
     patch_verl_dtensor_compat()
+    patch_verl_async_import()
     ensure_clean_verl_reward()
     patch_verl_reward()
     clean_verl_empty_cache()
