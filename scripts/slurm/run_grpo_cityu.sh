@@ -49,6 +49,15 @@ unset PYTORCH_CUDA_ALLOC_CONF
 # 清除 ROCm 变量（SLURM 可能自动设置，与 CUDA_VISIBLE_DEVICES 冲突）
 unset ROCR_VISIBLE_DEVICES
 
+# NCCL 修复：PCIe A100 之间 P2P 不可用，禁用后走 SHM
+export NCCL_P2P_DISABLE=1
+export NCCL_IB_DISABLE=1
+export NCCL_DEBUG=WARN
+
+# 清理残留 Ray 集群
+ray stop --force 2>/dev/null || true
+unset RAY_ADDRESS
+
 # ===== Ray 集群设置 =====
 nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
 nodes_array=($nodes)
@@ -183,13 +192,13 @@ PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     actor_rollout_ref.model.enable_gradient_checkpointing=true \
     +actor_rollout_ref.model.override_config.attn_implementation=sdpa \
     actor_rollout_ref.actor.fsdp_config.param_offload=false \
-    actor_rollout_ref.actor.fsdp_config.optimizer_offload=false \
+    actor_rollout_ref.actor.fsdp_config.optimizer_offload=true \
     +actor_rollout_ref.actor.optim.override_optimizer_config.foreach=false \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.35 \
-    actor_rollout_ref.rollout.max_model_len=6144 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.50 \
+    actor_rollout_ref.rollout.max_model_len=4096 \
     actor_rollout_ref.rollout.n=5 \
     algorithm.use_kl_in_reward=false \
     custom_reward_function.path="$REWARD_FN_PATH" \
