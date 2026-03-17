@@ -40,9 +40,13 @@ export VLLM_ATTENTION_BACKEND=FLASH_ATTN
 export RAY_memory_monitor_refresh_ms=0
 export HYDRA_FULL_ERROR=1
 export PYTHONUNBUFFERED=1
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
 
 # 禁用 expandable_segments（与 vLLM memory pool 不兼容）
 unset PYTORCH_CUDA_ALLOC_CONF
+# 清除 ROCm 变量（SLURM 可能自动设置，与 CUDA_VISIBLE_DEVICES 冲突）
+unset ROCR_VISIBLE_DEVICES
 
 # ===== Ray 集群设置 =====
 nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
