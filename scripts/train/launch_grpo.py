@@ -374,15 +374,20 @@ def patch_verl_dtensor_compat():
 # ============================================================
 # 公共辅助：应用所有补丁
 # ============================================================
-def apply_all_patches(project_dir=PROJECT_DIR):
-    """应用所有 verl 补丁。可被 SLURM 脚本直接调用。"""
+def apply_all_patches(project_dir=PROJECT_DIR, optim_tolerant=False):
+    """应用所有 verl 补丁。可被 SLURM 脚本直接调用。
+
+    Args:
+        optim_tolerant: 是否打 optimizer 容错补丁（仅在从损坏 checkpoint 恢复时需要）
+    """
     patch_verl_dtensor_compat()
     ensure_clean_verl_reward()
     patch_verl_reward()
     clean_verl_empty_cache()
     patch_verl_empty_cache()
-    clean_verl_optim_patch()
-    patch_verl_optim_tolerant()
+    if optim_tolerant:
+        clean_verl_optim_patch()
+        patch_verl_optim_tolerant()
     prepare_checkpoint_resume(os.path.join(project_dir, "checkpoints", "grpo"))
     print("[patches] All patches applied successfully")
 
