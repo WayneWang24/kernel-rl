@@ -42,6 +42,7 @@ export HYDRA_FULL_ERROR=1
 export PYTHONUNBUFFERED=1
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
+export TORCHDYNAMO_DISABLE=1
 
 # 禁用 expandable_segments（与 vLLM memory pool 不兼容）
 unset PYTORCH_CUDA_ALLOC_CONF
