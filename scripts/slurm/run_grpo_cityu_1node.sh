@@ -47,6 +47,11 @@ unset PYTORCH_CUDA_ALLOC_CONF
 # 清除 ROCm 变量
 unset ROCR_VISIBLE_DEVICES
 
+# ===== Step 0: 清理残留 Ray 集群 =====
+ray stop --force 2>/dev/null || true
+# 防止连接旧集群
+unset RAY_ADDRESS
+
 # ===== Step 1: 应用 verl 补丁 =====
 echo "=== Applying verl patches ==="
 python -c "
