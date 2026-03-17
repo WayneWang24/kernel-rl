@@ -318,10 +318,65 @@ def prepare_checkpoint_resume(ckpt_dir):
 
 
 # ============================================================
+# Step 0e: 补丁 DTensor import（PyTorch 2.4 兼容）
+#
+# verl 0.7.0（新版）使用 from torch.distributed.tensor import DTensor
+# 但 PyTorch 2.4 中 DTensor 在 torch.distributed._tensor
+# 替换为 try/except 兼容写法
+# ============================================================
+DTENSOR_PATCH_MARKER = "# [kernel-rl-dtensor-compat]"
+
+
+def patch_verl_dtensor_compat():
+    """修复 verl 中所有 DTensor import 以兼容 PyTorch 2.4。"""
+    # 检查是否需要补丁（PyTorch 2.5+ 不需要）
+    try:
+        from torch.distributed.tensor import DTensor  # noqa: F401
+        print("[patch] DTensor import OK, no compat patch needed")
+        return
+    except ImportError:
+        pass
+
+    import importlib.util
+    verl_spec = importlib.util.find_spec("verl")
+    if verl_spec is None or verl_spec.origin is None:
+        return
+    verl_root = os.path.dirname(verl_spec.origin)
+
+    old_import = "from torch.distributed.tensor import DTensor"
+    new_import = (
+        "try:  " + DTENSOR_PATCH_MARKER + "\n"
+        "    from torch.distributed.tensor import DTensor  " + DTENSOR_PATCH_MARKER + "\n"
+        "except ImportError:  " + DTENSOR_PATCH_MARKER + "\n"
+        "    from torch.distributed._tensor import DTensor  " + DTENSOR_PATCH_MARKER
+    )
+
+    patched_files = 0
+    for root, dirs, files in os.walk(verl_root):
+        for fname in files:
+            if not fname.endswith(".py"):
+                continue
+            fpath = os.path.join(root, fname)
+            with open(fpath) as f:
+                content = f.read()
+            if old_import in content and DTENSOR_PATCH_MARKER not in content:
+                content = content.replace(old_import, new_import)
+                with open(fpath, "w") as f:
+                    f.write(content)
+                patched_files += 1
+
+    if patched_files:
+        print(f"[patch] Fixed DTensor import in {patched_files} verl files (PyTorch 2.4 compat)")
+    else:
+        print("[patch] No DTensor import fixes needed")
+
+
+# ============================================================
 # 公共辅助：应用所有补丁
 # ============================================================
 def apply_all_patches(project_dir=PROJECT_DIR):
     """应用所有 verl 补丁。可被 SLURM 脚本直接调用。"""
+    patch_verl_dtensor_compat()
     ensure_clean_verl_reward()
     patch_verl_reward()
     clean_verl_empty_cache()
