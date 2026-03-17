@@ -386,7 +386,13 @@ ASYNC_IMPORT_PATCH_MARKER = "# [kernel-rl-async-import-compat]"
 
 
 def patch_verl_async_import():
-    """修复 vllm_async_server.py 的 import 兼容问题。"""
+    """让 vllm_async_server.py 在 vLLM 0.7.x 下整体优雅降级。
+
+    该文件有大量 vLLM 0.8+ 专属 import，逐个补丁不可行。
+    直接把整个文件内容包在 try/except 里，import 失败时
+    只留一个 vLLMReplica = None 占位符。正常训练走同步 rollout，
+    不会实际使用 vLLMReplica。
+    """
     try:
         fpath = _find_module_file("verl.workers.rollout.vllm_rollout.vllm_async_server")
     except ImportError:
@@ -400,22 +406,23 @@ def patch_verl_async_import():
         print("[patch] vllm_async_server already patched for import compat")
         return
 
-    old_import = "from vllm.v1.engine.utils import CoreEngineProcManager"
-    if old_import not in content:
-        print("[patch] vllm_async_server: target import not found, skipping")
-        return
-
-    new_import = (
+    # 把整个文件替换为 try/except 包裹的版本
+    indented = "\n".join("    " + line if line.strip() else "" for line in content.split("\n"))
+    new_content = (
+        f"# This file has been wrapped for vLLM 0.7.x compatibility  {ASYNC_IMPORT_PATCH_MARKER}\n"
         f"try:  {ASYNC_IMPORT_PATCH_MARKER}\n"
-        f"    from vllm.v1.engine.utils import CoreEngineProcManager  {ASYNC_IMPORT_PATCH_MARKER}\n"
-        f"except ImportError:  {ASYNC_IMPORT_PATCH_MARKER}\n"
-        f"    CoreEngineProcManager = None  {ASYNC_IMPORT_PATCH_MARKER}"
+        f"    _ASYNC_SERVER_AVAILABLE = True  {ASYNC_IMPORT_PATCH_MARKER}\n"
+        f"{indented}\n"
+        f"except (ImportError, Exception) as _e:  {ASYNC_IMPORT_PATCH_MARKER}\n"
+        f"    import warnings  {ASYNC_IMPORT_PATCH_MARKER}\n"
+        f"    warnings.warn(f'vllm_async_server unavailable (vLLM 0.7.x compat): {{_e}}')  {ASYNC_IMPORT_PATCH_MARKER}\n"
+        f"    vLLMReplica = None  {ASYNC_IMPORT_PATCH_MARKER}\n"
+        f"    _ASYNC_SERVER_AVAILABLE = False  {ASYNC_IMPORT_PATCH_MARKER}\n"
     )
 
-    content = content.replace(old_import, new_import)
     with open(fpath, "w") as f:
-        f.write(content)
-    print(f"[patch] Patched vllm_async_server.py for vLLM 0.7.x compat ({fpath})")
+        f.write(new_content)
+    print(f"[patch] Wrapped vllm_async_server.py for vLLM 0.7.x compat ({fpath})")
 
 
 # ============================================================
