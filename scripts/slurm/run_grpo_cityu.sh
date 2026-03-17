@@ -145,7 +145,7 @@ if [ -d "$SFT_CHECKPOINT" ]; then
     MODEL_PATH="$SFT_CHECKPOINT"
     echo "Using SFT checkpoint: $MODEL_PATH"
 else
-    MODEL_PATH="${MODEL_PATH:-Qwen/Qwen2.5-Coder-3B-Instruct}"
+    MODEL_PATH="${MODEL_PATH:-Qwen/Qwen2.5-Coder-7B-Instruct}"
     echo "Using base model: $MODEL_PATH"
 fi
 
@@ -173,7 +173,7 @@ PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=false \
     actor_rollout_ref.actor.ppo_mini_batch_size=32 \
-    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=2 \
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.actor.use_kl_loss=false \
     actor_rollout_ref.actor.entropy_coeff=0 \
     actor_rollout_ref.model.enable_gradient_checkpointing=true \
@@ -181,7 +181,7 @@ PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     actor_rollout_ref.actor.fsdp_config.param_offload=false \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=false \
     +actor_rollout_ref.actor.optim.override_optimizer_config.foreach=false \
-    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=2 \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.35 \
@@ -193,7 +193,7 @@ PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     trainer.critic_warmup=0 \
     trainer.logger='["console"]' \
     trainer.project_name=kernel_rl \
-    trainer.experiment_name=grpo_qwen25_coder_3b_9gpu \
+    trainer.experiment_name=grpo_qwen25_coder_7b_9gpu \
     trainer.default_local_dir="${PROJECT_DIR}/checkpoints/grpo" \
     trainer.n_gpus_per_node=3 \
     trainer.nnodes=3 \
