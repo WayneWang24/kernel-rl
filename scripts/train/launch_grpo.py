@@ -18,12 +18,23 @@ os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
 
 
 def _find_module_file(module_name):
-    """用 importlib 找模块文件路径，不触发完整 import（避免 PyTorch 版本不兼容）。"""
+    """找模块文件路径，完全不触发 import（避免 PyTorch/verl 版本不兼容）。"""
     import importlib.util
-    spec = importlib.util.find_spec(module_name)
-    if spec is None or spec.origin is None:
-        raise ImportError(f"Cannot find module: {module_name}")
-    return spec.origin
+    # 只 find_spec 顶层包 "verl"，然后手动拼路径
+    verl_spec = importlib.util.find_spec("verl")
+    if verl_spec is None or verl_spec.origin is None:
+        raise ImportError("Cannot find verl package")
+    verl_root = os.path.dirname(verl_spec.origin)  # verl/ 目录
+    # "verl.utils.reward_score" → "utils/reward_score"
+    parts = module_name.split(".")[1:]  # 去掉 "verl"
+    candidate = os.path.join(verl_root, *parts) + ".py"
+    if os.path.isfile(candidate):
+        return candidate
+    # 可能是包（目录/__init__.py）
+    candidate_init = os.path.join(verl_root, *parts, "__init__.py")
+    if os.path.isfile(candidate_init):
+        return candidate_init
+    raise ImportError(f"Cannot find file for module: {module_name}")
 
 
 # ============================================================
