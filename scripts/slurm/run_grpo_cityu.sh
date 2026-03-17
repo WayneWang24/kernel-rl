@@ -21,8 +21,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=0
 #SBATCH --time=48:00:00
-#SBATCH --output=logs/grpo_%j.out
-#SBATCH --error=logs/grpo_%j.err
+#SBATCH --output=%x_%j.out
+#SBATCH --error=%x_%j.err
 
 set -euxo pipefail
 
@@ -30,10 +30,9 @@ set -euxo pipefail
 eval "$(conda shell.bash hook)"
 conda activate kernel-rl
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# SLURM 会把脚本拷贝到 /var/spool，不能用 $0 推导路径
+PROJECT_DIR="${HOME}/ChenweiWang/workspace/kernel-rl"
 
-# 创建日志目录（SBATCH output 需要）
 mkdir -p "${PROJECT_DIR}/logs"
 
 # ===== 环境变量 =====
