@@ -507,6 +507,44 @@ def patch_verl_skip_agent_loop():
 
 
 # ============================================================
+# Step 0h: 补丁 worker.py 的 ROCR_VISIBLE_DEVICES 检查
+#
+# SLURM 会给每个进程注入 ROCR_VISIBLE_DEVICES（AMD ROCm 变量），
+# 当同时存在 CUDA_VISIBLE_DEVICES 时，verl 会直接 raise ValueError。
+# 在纯 NVIDIA 环境下，ROCR 变量无意义，直接在检查前 pop 掉。
+# ============================================================
+ROCR_PATCH_MARKER = "# [kernel-rl-rocr-fix]"
+
+
+def patch_verl_rocr_fix():
+    """在 worker.py 的 _setup_env_cuda_visible_devices 开头清除 ROCR_VISIBLE_DEVICES。"""
+    fpath = _find_module_file("verl.single_controller.base.worker")
+
+    with open(fpath) as f:
+        content = f.read()
+
+    if ROCR_PATCH_MARKER in content:
+        print("[patch] worker.py ROCR fix already applied")
+        return
+
+    target = "def _setup_env_cuda_visible_devices(self):"
+    if target not in content:
+        print("[patch] worker.py: _setup_env_cuda_visible_devices not found, skipping")
+        return
+
+    # 在函数定义后插入 pop ROCR
+    replacement = (
+        f"{target}\n"
+        f"        os.environ.pop('ROCR_VISIBLE_DEVICES', None)  {ROCR_PATCH_MARKER}"
+    )
+    content = content.replace(target, replacement)
+
+    with open(fpath, "w") as f:
+        f.write(content)
+    print(f"[patch] Patched worker.py to remove ROCR_VISIBLE_DEVICES ({fpath})")
+
+
+# ============================================================
 # 公共辅助：应用所有补丁
 # ============================================================
 def apply_all_patches(project_dir=PROJECT_DIR, optim_tolerant=False):
@@ -518,6 +556,7 @@ def apply_all_patches(project_dir=PROJECT_DIR, optim_tolerant=False):
     patch_verl_dtensor_compat()
     patch_verl_async_import()
     patch_verl_skip_agent_loop()
+    patch_verl_rocr_fix()
     ensure_clean_verl_reward()
     patch_verl_reward()
     clean_verl_empty_cache()
