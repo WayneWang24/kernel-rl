@@ -47,6 +47,11 @@ unset PYTORCH_CUDA_ALLOC_CONF
 # 清除 ROCm 变量
 unset ROCR_VISIBLE_DEVICES
 
+# NCCL 修复：PCIe A100 之间 P2P 可能不可用，禁用后走 SHM
+export NCCL_P2P_DISABLE=1
+export NCCL_IB_DISABLE=1
+export NCCL_DEBUG=WARN
+
 # ===== Step 0: 清理残留 Ray 集群 =====
 ray stop --force 2>/dev/null || true
 # 防止连接旧集群
