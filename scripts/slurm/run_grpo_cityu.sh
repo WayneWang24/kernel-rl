@@ -168,7 +168,7 @@ PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     algorithm.adv_estimator=grpo \
     data.train_files="$TRAIN_PATH" \
     data.val_files="$VAL_PATH" \
-    data.train_batch_size=32 \
+    data.train_batch_size=36 \
     data.max_prompt_length=2048 \
     data.max_response_length=4096 \
     data.filter_overlong_prompts=true \
@@ -176,7 +176,7 @@ PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     actor_rollout_ref.model.path="$MODEL_PATH" \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=false \
-    actor_rollout_ref.actor.ppo_mini_batch_size=32 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=36 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.actor.use_kl_loss=false \
     actor_rollout_ref.actor.entropy_coeff=0 \
@@ -192,8 +192,8 @@ PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     actor_rollout_ref.rollout.max_model_len=6144 \
     actor_rollout_ref.rollout.n=5 \
     algorithm.use_kl_in_reward=false \
-    +reward.custom_reward_function.path="$REWARD_FN_PATH" \
-    +reward.custom_reward_function.name="$REWARD_FN_NAME" \
+    custom_reward_function.path="$REWARD_FN_PATH" \
+    custom_reward_function.name="$REWARD_FN_NAME" \
     trainer.critic_warmup=0 \
     trainer.logger='["console"]' \
     trainer.project_name=kernel_rl \
