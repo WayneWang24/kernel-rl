@@ -426,6 +426,87 @@ def patch_verl_async_import():
 
 
 # ============================================================
+# Step 0g: 补丁 ray_trainer.py 跳过 AgentLoopManager
+#
+# AgentLoopManager 在 init_workers() 中无条件初始化，
+# 但它依赖 vLLM 0.8+ 的 async server。
+# 我们让它在初始化失败时优雅跳过。
+# ============================================================
+AGENT_LOOP_PATCH_MARKER = "# [kernel-rl-agent-loop-skip]"
+
+
+def patch_verl_skip_agent_loop():
+    """让 ray_trainer.py 在 AgentLoopManager 初始化失败时跳过。"""
+    fpath = _find_module_file("verl.trainer.ppo.ray_trainer")
+
+    with open(fpath) as f:
+        content = f.read()
+
+    if AGENT_LOOP_PATCH_MARKER in content:
+        print("[patch] ray_trainer already patched to skip AgentLoopManager")
+        return
+
+    # 找到 self.async_rollout_manager = AgentLoopManager( 这行
+    target = "self.async_rollout_manager = AgentLoopManager("
+    if target not in content:
+        print("[patch] ray_trainer: AgentLoopManager init not found, skipping")
+        return
+
+    lines = content.split("\n")
+    new_lines = []
+    i = 0
+    patched = False
+    while i < len(lines):
+        line = lines[i]
+        if not patched and target in line:
+            indent = len(line) - len(line.lstrip())
+            s = " " * indent
+            # 插入 try 在 AgentLoopManager import 之前
+            # 先找到 from verl.experimental.agent_loop import 那行（在前面几行）
+            # 从当前位置向前找 import 行
+            import_idx = None
+            for j in range(len(new_lines) - 1, max(len(new_lines) - 15, -1), -1):
+                if "from verl.experimental.agent_loop import" in new_lines[j]:
+                    import_idx = j
+                    break
+
+            if import_idx is not None:
+                # 在 import 行前插入 try
+                new_lines.insert(import_idx, f"{s}try:  {AGENT_LOOP_PATCH_MARKER}")
+                # import 行和后续行都需要额外缩进
+                for k in range(import_idx + 1, len(new_lines)):
+                    new_lines[k] = "    " + new_lines[k]
+
+            # 当前行（AgentLoopManager 初始化）也需要缩进
+            new_lines.append("    " + line)
+            i += 1
+            # 继续缩进直到 AgentLoopManager(...) 结束（找到匹配的右括号）
+            paren_depth = line.count("(") - line.count(")")
+            while i < len(lines) and paren_depth > 0:
+                line2 = lines[i]
+                paren_depth += line2.count("(") - line2.count(")")
+                new_lines.append("    " + line2)
+                i += 1
+
+            # 插入 except
+            new_lines.append(f"{s}except (ImportError, TypeError, Exception) as _e:  {AGENT_LOOP_PATCH_MARKER}")
+            new_lines.append(f"{s}    import warnings  {AGENT_LOOP_PATCH_MARKER}")
+            new_lines.append(f'{s}    warnings.warn(f"AgentLoopManager unavailable, skipping async rollout: {{_e}}")  {AGENT_LOOP_PATCH_MARKER}')
+            new_lines.append(f"{s}    self.async_rollout_manager = None  {AGENT_LOOP_PATCH_MARKER}")
+            patched = True
+        else:
+            new_lines.append(line)
+            i += 1
+
+    if patched:
+        with open(fpath, "w") as f:
+            f.write("\n".join(new_lines))
+        print(f"[patch] Patched ray_trainer.py to skip AgentLoopManager on failure ({fpath})")
+    else:
+        print("[patch] WARNING: could not patch AgentLoopManager in ray_trainer.py")
+
+
+# ============================================================
 # 公共辅助：应用所有补丁
 # ============================================================
 def apply_all_patches(project_dir=PROJECT_DIR, optim_tolerant=False):
@@ -436,6 +517,7 @@ def apply_all_patches(project_dir=PROJECT_DIR, optim_tolerant=False):
     """
     patch_verl_dtensor_compat()
     patch_verl_async_import()
+    patch_verl_skip_agent_loop()
     ensure_clean_verl_reward()
     patch_verl_reward()
     clean_verl_empty_cache()
