@@ -17,6 +17,15 @@ REWARD_FN_PATH = os.path.join(PROJECT_DIR, "src", "reward", "kernel_reward.py")
 os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
 
 
+def _find_module_file(module_name):
+    """用 importlib 找模块文件路径，不触发完整 import（避免 PyTorch 版本不兼容）。"""
+    import importlib.util
+    spec = importlib.util.find_spec(module_name)
+    if spec is None or spec.origin is None:
+        raise ImportError(f"Cannot find module: {module_name}")
+    return spec.origin
+
+
 # ============================================================
 # Step 0: 补丁 verl 的 default_compute_score 以支持 kernelbook
 #
@@ -27,9 +36,7 @@ os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
 # ============================================================
 def patch_verl_reward():
     """给 verl 的 default_compute_score 添加 kernelbook 处理。"""
-    import verl.utils.reward_score as reward_module
-
-    fpath = reward_module.__file__
+    fpath = _find_module_file("verl.utils.reward_score")
     with open(fpath) as f:
         content = f.read()
 
@@ -65,9 +72,7 @@ def patch_verl_reward():
 # 先恢复再补丁（处理之前坏掉的补丁）
 def ensure_clean_verl_reward():
     """确保 verl reward_score 文件干净，再打补丁。"""
-    import verl.utils.reward_score as reward_module
-
-    fpath = reward_module.__file__
+    fpath = _find_module_file("verl.utils.reward_score")
     with open(fpath) as f:
         lines = f.readlines()
 
@@ -99,10 +104,10 @@ def ensure_clean_verl_reward():
             f.writelines(clean_lines)
         print(f"[patch] Cleaned previous kernelbook patch from {fpath}")
 
-    # 验证清理后文件能正常 import
+    # 验证清理后文件语法正确
     try:
-        import importlib
-        importlib.reload(reward_module)
+        with open(fpath) as f:
+            compile(f.read(), fpath, "exec")
     except SyntaxError as e:
         print(f"[patch] ERROR: verl reward_score has syntax error after cleanup: {e}")
         print("[patch] Please run: pip install verl==0.7.0 --force-reinstall --no-deps")
@@ -122,9 +127,7 @@ EMPTY_CACHE_PATCH_MARKER = "# [kernel-rl-empty-cache-patch]"
 
 def clean_verl_empty_cache():
     """移除之前的 empty_cache 补丁。"""
-    import verl.workers.fsdp_workers as mod
-
-    fpath = mod.__file__
+    fpath = _find_module_file("verl.workers.fsdp_workers")
     with open(fpath) as f:
         lines = f.readlines()
     if not any(EMPTY_CACHE_PATCH_MARKER in l for l in lines):
@@ -137,9 +140,7 @@ def clean_verl_empty_cache():
 
 def patch_verl_empty_cache():
     """在 fsdp_workers.py 的每个 rollout.resume() 前注入 empty_cache。"""
-    import verl.workers.fsdp_workers as mod
-
-    fpath = mod.__file__
+    fpath = _find_module_file("verl.workers.fsdp_workers")
     with open(fpath) as f:
         lines = f.readlines()
 
@@ -181,9 +182,7 @@ OPTIM_PATCH_MARKER = "# [kernel-rl-optim-tolerant-patch]"
 
 def clean_verl_optim_patch():
     """移除之前的 optimizer 容错补丁。"""
-    import verl.utils.checkpoint.fsdp_checkpoint_manager as mod
-
-    fpath = mod.__file__
+    fpath = _find_module_file("verl.utils.checkpoint.fsdp_checkpoint_manager")
     with open(fpath) as f:
         lines = f.readlines()
     if not any(OPTIM_PATCH_MARKER in l for l in lines):
@@ -196,9 +195,7 @@ def clean_verl_optim_patch():
 
 def patch_verl_optim_tolerant():
     """给 optimizer state 加载加上 try-except 容错。"""
-    import verl.utils.checkpoint.fsdp_checkpoint_manager as mod
-
-    fpath = mod.__file__
+    fpath = _find_module_file("verl.utils.checkpoint.fsdp_checkpoint_manager")
     with open(fpath) as f:
         content = f.read()
 
