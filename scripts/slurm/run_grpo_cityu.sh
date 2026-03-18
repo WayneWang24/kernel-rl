@@ -20,7 +20,7 @@
 #SBATCH --gpus-per-node=3
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=0
-#SBATCH --time=48:00:00
+#SBATCH --time=720:00:00
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
 
@@ -190,10 +190,12 @@ PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     actor_rollout_ref.actor.use_kl_loss=false \
     actor_rollout_ref.actor.entropy_coeff=0 \
     actor_rollout_ref.model.enable_gradient_checkpointing=true \
+    actor_rollout_ref.model.lora_rank=64 \
+    actor_rollout_ref.model.lora_alpha=16 \
+    actor_rollout_ref.model.target_modules=all-linear \
     +actor_rollout_ref.model.override_config.attn_implementation=sdpa \
     actor_rollout_ref.actor.fsdp_config.param_offload=false \
-    actor_rollout_ref.actor.fsdp_config.optimizer_offload=true \
-    +actor_rollout_ref.actor.optim.override_optimizer_config.foreach=false \
+    actor_rollout_ref.actor.fsdp_config.optimizer_offload=false \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
@@ -206,12 +208,12 @@ PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     trainer.critic_warmup=0 \
     trainer.logger='["console"]' \
     trainer.project_name=kernel_rl \
-    trainer.experiment_name=grpo_qwen25_coder_7b_9gpu \
-    trainer.default_local_dir="${PROJECT_DIR}/checkpoints/grpo" \
+    trainer.experiment_name=grpo_qwen25_coder_7b_9gpu_lora \
+    trainer.default_local_dir="${PROJECT_DIR}/checkpoints/grpo_lora" \
     trainer.n_gpus_per_node=3 \
     trainer.nnodes=3 \
-    trainer.save_freq=200 \
-    trainer.test_freq=200 \
+    trainer.save_freq=50 \
+    trainer.test_freq=50 \
     trainer.max_actor_ckpt_to_keep=1 \
     trainer.total_epochs=3 \
     2>&1 | tee "${PROJECT_DIR}/logs/grpo_cityu_${SLURM_JOB_ID}.log"
