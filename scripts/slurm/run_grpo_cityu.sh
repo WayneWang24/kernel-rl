@@ -199,8 +199,8 @@ PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
-    +actor_rollout_ref.rollout.load_format=safetensors \
-    +actor_rollout_ref.rollout.layered_summon=true \
+    actor_rollout_ref.rollout.load_format=safetensors \
+    ++actor_rollout_ref.rollout.layered_summon=true \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.50 \
     actor_rollout_ref.rollout.max_model_len=4096 \
     actor_rollout_ref.rollout.n=5 \
