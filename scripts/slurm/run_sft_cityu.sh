@@ -99,8 +99,8 @@ torchrun --standalone --nnodes=1 --nproc_per_node=3 \
     +model.override_config.attn_implementation=sdpa \
     trainer.total_epochs=3 \
     trainer.default_local_dir="$CHECKPOINT_DIR" \
-    trainer.save_freq=1 \
-    trainer.test_freq=1 \
+    trainer.save_freq=136 \
+    trainer.test_freq=136 \
     trainer.project_name=kernel_sft \
     trainer.experiment_name=qwen25_coder_7b_triton_cityu \
     2>&1 | tee "${PROJECT_DIR}/logs/sft_cityu_${SLURM_JOB_ID}.log"
