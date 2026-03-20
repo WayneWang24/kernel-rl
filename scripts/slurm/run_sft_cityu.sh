@@ -2,7 +2,7 @@
 # ============================================================
 # CityU HPC SLURM — SFT 训练（KernelBook Triton → ModelNew）
 #
-# 硬件：1 节点 × 3× A100 40GB
+# 硬件：2 节点 × 3× A100 40GB = 6 GPU
 # 数据：data/split/sft/ (KernelBook ModelNew 格式)
 # 模型：Qwen/Qwen2.5-Coder-7B-Instruct → LoRA rank=64
 #
@@ -12,12 +12,12 @@
 
 #SBATCH --job-name=kernel-rl-sft
 #SBATCH --partition=gpu3
-#SBATCH --nodes=1
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=3
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=0
-#SBATCH --time=24:00:00
+#SBATCH --time=48:00:00
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
 
@@ -51,6 +51,26 @@ from launch_grpo import patch_verl_fsdp_clip_grad
 patch_verl_fsdp_clip_grad()
 "
 
+# ===== 多节点 torchrun 设置 =====
+nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
+nodes_array=($nodes)
+head_node=${nodes_array[0]}
+head_node_ip=$(srun --nodes=1 --ntasks=1 -w "$head_node" hostname --ip-address)
+
+# 处理多 IP（IPv6）
+if [[ "$head_node_ip" == *" "* ]]; then
+    IFS=' ' read -ra ADDR <<< "$head_node_ip"
+    if [[ ${#ADDR[0]} -gt 16 ]]; then
+        head_node_ip=${ADDR[1]}
+    else
+        head_node_ip=${ADDR[0]}
+    fi
+fi
+
+MASTER_PORT=29500
+echo "Master node: $head_node ($head_node_ip:$MASTER_PORT)"
+echo "Total nodes: $SLURM_JOB_NUM_NODES, GPUs/node: 3, Total GPUs: $((SLURM_JOB_NUM_NODES * 3))"
+
 # ===== 数据路径 =====
 if [ -f "${PROJECT_DIR}/data/split/sft/train.parquet" ]; then
     TRAIN_PATH="${PROJECT_DIR}/data/split/sft/train.parquet"
@@ -74,18 +94,24 @@ fi
 
 CHECKPOINT_DIR="${PROJECT_DIR}/checkpoints/sft_modelnew"
 
-echo "=== SFT Training (CityU HPC) ==="
+echo "=== SFT Training (CityU HPC, 2 nodes × 3 GPUs) ==="
 echo "Model:  $MODEL_PATH"
 echo "Train:  $TRAIN_PATH"
 echo "Output: $CHECKPOINT_DIR"
 
-# 3 GPU, micro_batch=1 (40GB 内存紧张), gradient checkpointing
-torchrun --standalone --nnodes=1 --nproc_per_node=3 \
+# 6 GPU, micro_batch=2, gradient checkpointing
+# batch_size=24 / (2 * 6) = 2 gradient accumulation steps
+srun torchrun \
+    --nnodes=$SLURM_JOB_NUM_NODES \
+    --nproc_per_node=3 \
+    --rdzv_id=$SLURM_JOB_ID \
+    --rdzv_backend=c10d \
+    --rdzv_endpoint=$head_node_ip:$MASTER_PORT \
     -m verl.trainer.fsdp_sft_trainer \
     data.train_files="$TRAIN_PATH" \
     data.val_files="$VAL_PATH" \
     data.train_batch_size=24 \
-    data.micro_batch_size_per_gpu=1 \
+    data.micro_batch_size_per_gpu=2 \
     data.max_length=4096 \
     data.truncation=left \
     data.multiturn.enable=true \
