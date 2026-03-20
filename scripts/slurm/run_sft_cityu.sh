@@ -2,7 +2,7 @@
 # ============================================================
 # CityU HPC SLURM — SFT 训练（KernelBook Triton → ModelNew）
 #
-# 硬件：1 节点 × 3× A100 40GB
+# 硬件：2 节点 × 3× A100 40GB = 6 GPU
 # 数据：data/split/sft/ (KernelBook ModelNew 格式)
 # 模型：Qwen/Qwen2.5-Coder-7B-Instruct → LoRA rank=64
 #
@@ -12,7 +12,7 @@
 
 #SBATCH --job-name=kernel-rl-sft
 #SBATCH --partition=gpu3
-#SBATCH --nodes=1
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=3
 #SBATCH --cpus-per-task=16
@@ -51,6 +51,34 @@ from launch_grpo import patch_verl_fsdp_clip_grad
 patch_verl_fsdp_clip_grad()
 "
 
+# ===== 多节点设置（同 GRPO 脚本模式） =====
+nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
+nodes_array=($nodes)
+head_node=${nodes_array[0]}
+head_node_ip=$(srun --nodes=1 --ntasks=1 -w "$head_node" hostname --ip-address)
+
+# 处理 IPv6
+if [[ "$head_node_ip" == *" "* ]]; then
+    IFS=' ' read -ra ADDR <<< "$head_node_ip"
+    if [[ ${#ADDR[0]} -gt 16 ]]; then
+        head_node_ip=${ADDR[1]}
+    else
+        head_node_ip=${ADDR[0]}
+    fi
+    echo "IPv6 detected, using IPv4: $head_node_ip"
+fi
+
+MASTER_PORT=29500
+
+echo "============================================"
+echo "  kernel-rl SFT Training (CityU HPC)"
+echo "============================================"
+echo "Head node:    $head_node ($head_node_ip)"
+echo "Nodes:        $SLURM_JOB_NUM_NODES"
+echo "GPUs/node:    3"
+echo "Total GPUs:   $((SLURM_JOB_NUM_NODES * 3))"
+echo "============================================"
+
 # ===== 数据路径 =====
 if [ -f "${PROJECT_DIR}/data/split/sft/train.parquet" ]; then
     TRAIN_PATH="${PROJECT_DIR}/data/split/sft/train.parquet"
@@ -74,24 +102,22 @@ fi
 
 CHECKPOINT_DIR="${PROJECT_DIR}/checkpoints/sft_modelnew"
 
-echo "=== SFT Training (CityU HPC) ==="
 echo "Model:  $MODEL_PATH"
 echo "Train:  $TRAIN_PATH"
 echo "Output: $CHECKPOINT_DIR"
 
-# 3 GPU, micro_batch=2, gradient checkpointing
-# 7B LoRA + grad ckpt + max_len=4096 + micro_batch=2 ≈ ~30GB/GPU
-torchrun --standalone --nnodes=1 --nproc_per_node=3 \
-    -m verl.trainer.fsdp_sft_trainer \
-    data.train_files="$TRAIN_PATH" \
-    data.val_files="$VAL_PATH" \
+# ===== 在每个节点上启动 torchrun（per-node srun 模式） =====
+# 与 GRPO 脚本相同的模式：每个节点一个 srun & 后台进程
+TORCHRUN_ARGS="-m verl.trainer.fsdp_sft_trainer \
+    data.train_files=$TRAIN_PATH \
+    data.val_files=$VAL_PATH \
     data.train_batch_size=24 \
     data.micro_batch_size_per_gpu=2 \
     data.max_length=4096 \
     data.truncation=left \
     data.multiturn.enable=true \
     data.multiturn.messages_key=messages \
-    model.partial_pretrain="$MODEL_PATH" \
+    model.partial_pretrain=$MODEL_PATH \
     model.enable_gradient_checkpointing=true \
     model.lora_rank=64 \
     model.lora_alpha=128 \
@@ -99,12 +125,28 @@ torchrun --standalone --nnodes=1 --nproc_per_node=3 \
     model.use_liger=false \
     +model.override_config.attn_implementation=sdpa \
     trainer.total_epochs=3 \
-    trainer.default_local_dir="$CHECKPOINT_DIR" \
+    trainer.default_local_dir=$CHECKPOINT_DIR \
     trainer.save_freq=1 \
     trainer.test_freq=1 \
     trainer.project_name=kernel_sft \
-    trainer.experiment_name=qwen25_coder_7b_triton_cityu \
-    2>&1 | tee "${PROJECT_DIR}/logs/sft_cityu_${SLURM_JOB_ID}.log"
+    trainer.experiment_name=qwen25_coder_7b_triton_cityu"
+
+for ((i = 0; i < SLURM_JOB_NUM_NODES; i++)); do
+    node=${nodes_array[$i]}
+    echo "Launching torchrun on node $i: $node"
+    srun --nodes=1 --ntasks=1 -w "$node" \
+        torchrun \
+        --nnodes=$SLURM_JOB_NUM_NODES \
+        --nproc_per_node=3 \
+        --rdzv_id=$SLURM_JOB_ID \
+        --rdzv_backend=c10d \
+        --rdzv_endpoint=$head_node_ip:$MASTER_PORT \
+        $TORCHRUN_ARGS &
+    sleep 2
+done
+
+echo "Waiting for all nodes to finish training..."
+wait
 
 echo "=== SFT Complete ==="
 echo "Next: merge LoRA → run CUDA RL"
