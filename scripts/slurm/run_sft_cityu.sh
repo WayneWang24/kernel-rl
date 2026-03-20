@@ -23,8 +23,11 @@
 
 set -euxo pipefail
 
+# conda activate 期间关闭 -u（cuda-nvcc 激活脚本有未定义变量）
+set +u
 eval "$(conda shell.bash hook)"
 conda activate kernel-rl
+set -u
 
 PROJECT_DIR="${HOME}/ChenweiWang/workspace/kernel-rl"
 mkdir -p "${PROJECT_DIR}/logs"

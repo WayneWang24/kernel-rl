@@ -27,8 +27,11 @@
 set -euxo pipefail
 
 # ===== 环境 =====
+# conda activate 期间关闭 -u（cuda-nvcc 激活脚本有未定义变量）
+set +u
 eval "$(conda shell.bash hook)"
 conda activate kernel-rl
+set -u
 
 # SLURM 会把脚本拷贝到 /var/spool，不能用 $0 推导路径
 PROJECT_DIR="${HOME}/ChenweiWang/workspace/kernel-rl"
