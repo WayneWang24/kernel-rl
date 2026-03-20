@@ -1,31 +1,26 @@
 """
-Triton Kernel Reward 函数。
+Kernel Reward 函数。
 
 兼容 verl 的 NaiveRewardManager 调用签名：
     compute_score(data_source, solution_str, ground_truth, extra_info=None, **kwargs)
     返回 float (0.0 ~ 1.0)
 
-== 训练时 reward（compute_score）==
+== Triton 训练 reward（compute_score）==
 纯静态分析，不做编译/运行，速度快。
 
-分层策略：
-    R0 = 0.0  : 无代码块
-    R1 = 0.1  : 有代码块但无有效函数/类定义
-    R2 = 0.2  : 有代码但 Python 语法错误
-    R3 = 0.4  : 语法正确但无 Triton kernel（无 @triton.jit）
-    R4 = 0.6  : 有 @triton.jit 但结构不完整（缺 wrapper 函数）
-    R5 = 0.8  : 完整的 Triton kernel + wrapper
-    bonus +0.1: 包含性能优化（autotune / BLOCK_SIZE 参数化）
-    bonus +0.1: 代码非简单复制（与 ground_truth 有足够差异）
+== CUDA 训练 reward（compute_score_cuda）==
+三阶段混合评分：静态分析 + 编译验证 + 运行验证。
 
 == 评测时 reward（compute_score_full）==
 包含编译和正确性验证，慢但准确。
 """
 
 import ast
+import hashlib
 import re
 import subprocess
 import tempfile
+import textwrap
 import os
 from typing import Optional
 
@@ -49,7 +44,8 @@ def extract_code_block(text: str) -> Optional[str]:
         return max(matches, key=len).strip()
 
     # 如果没有代码块标记，检查是否整段都是代码
-    if ("import triton" in text or "@triton.jit" in text) and "def " in text:
+    if ("import triton" in text or "@triton.jit" in text
+            or "load_inline" in text or "cpp_extension" in text) and "def " in text:
         return text.strip()
 
     return None
@@ -99,13 +95,17 @@ def has_wrapper_function(code: str) -> bool:
 
 
 def has_performance_optimization(code: str) -> bool:
-    """检查是否包含性能优化模式。"""
+    """检查是否包含性能优化模式（Triton 或 CUDA）。"""
     patterns = [
-        r"@triton\.autotune",          # autotune 装饰器
+        r"@triton\.autotune",          # Triton autotune
         r"BLOCK_SIZE",                  # 参数化 block size
         r"tl\.constexpr",              # constexpr 参数
         r"num_warps",                   # warp 配置
         r"num_stages",                  # pipeline stages
+        r"__shared__",                  # CUDA shared memory
+        r"__syncthreads",              # CUDA thread sync
+        r"coalesced",                   # memory coalescing comment
+        r"#pragma\s+unroll",           # CUDA loop unroll
     ]
     return any(re.search(p, code) for p in patterns)
 
@@ -365,10 +365,12 @@ def has_custom_forward(code: str) -> bool:
                 and "super()" not in c
             ]
 
-            # 检查是否有自定义 kernel/函数调用
+            # 检查是否有自定义 kernel/函数调用（Triton 或 CUDA）
             has_custom = bool(
                 re.search(r"(triton|tl\.|kernel|custom|_kernel|_fn)\s*[.(]", source_lines)
-                or re.search(r"\w+_kernel\s*\[", source_lines)  # kernel launch: kernel_fn[grid](...)
+                or re.search(r"\w+_kernel\s*\[", source_lines)  # Triton kernel launch: kernel_fn[grid](...)
+                or re.search(r"\w+\.\w+_cuda\s*\(", source_lines)  # CUDA: module.func_cuda(...)
+                or re.search(r"load_inline\s*\(", source_lines)  # load_inline 在 forward 中
             )
 
             # 如果有大量标准调用且没有自定义调用，认为不是 custom forward
@@ -412,6 +414,292 @@ def has_init_preserving_structure(code: str) -> bool:
             return bool(re.search(r"self\.\w+\s*=\s*nn\.\w+\(", source_lines))
 
     return False
+
+
+# ============================================================
+# CUDA 静态检查工具
+# ============================================================
+
+def has_cuda_kernel(code: str) -> bool:
+    """检查是否包含 CUDA kernel（__global__ 或 load_inline）。"""
+    return bool(
+        re.search(r"__global__", code)
+        or re.search(r"load_inline\s*\(", code)
+        or re.search(r"cpp_extension", code)
+    )
+
+
+def has_load_inline(code: str) -> bool:
+    """检查是否包含 load_inline 调用。"""
+    return bool(re.search(r"load_inline\s*\(", code))
+
+
+def has_proper_cuda_structure(code: str) -> bool:
+    """检查 load_inline 三件套：cpp_sources + cuda_sources + functions。"""
+    has_cpp = bool(re.search(r"cpp_sources?\s*=", code))
+    has_cuda = bool(re.search(r"cuda_sources?\s*=", code))
+    has_funcs = bool(re.search(r"functions\s*=", code))
+    return has_cpp and has_cuda and has_funcs
+
+
+# ============================================================
+# CUDA compile+run 子函数
+# ============================================================
+
+def _build_cuda_compile_script(generated_code: str) -> str:
+    """构建 CUDA 编译验证脚本（仅编译，不运行 forward）。"""
+    # 给 load_inline 的 name 加 hash 后缀避免缓存冲突
+    code_hash = hashlib.md5(generated_code.encode()).hexdigest()[:8]
+    patched_code = re.sub(
+        r'(load_inline\s*\(\s*name\s*=\s*["\'])(\w+)(["\'])',
+        rf'\1\2_{code_hash}\3',
+        generated_code,
+    )
+    return f'''import torch
+import torch.nn as nn
+import sys
+import os
+
+# 抑制编译输出
+os.environ.setdefault("TORCH_CPP_LOG_LEVEL", "ERROR")
+
+try:
+{textwrap.indent(patched_code, "    ")}
+    print("COMPILE_OK")
+except Exception as e:
+    print(f"COMPILE_FAIL: {{e}}", file=sys.stderr)
+    sys.exit(1)
+'''
+
+
+def _build_cuda_instantiate_script(generated_code: str) -> str:
+    """构建 ModelNew 实例化验证脚本。"""
+    code_hash = hashlib.md5(generated_code.encode()).hexdigest()[:8]
+    patched_code = re.sub(
+        r'(load_inline\s*\(\s*name\s*=\s*["\'])(\w+)(["\'])',
+        rf'\1\2_{code_hash}\3',
+        generated_code,
+    )
+    return f'''import torch
+import torch.nn as nn
+import sys
+import os
+os.environ.setdefault("TORCH_CPP_LOG_LEVEL", "ERROR")
+
+try:
+{textwrap.indent(patched_code, "    ")}
+    # 检查 ModelNew 可以实例化（需要从 reference 拿 get_init_inputs）
+    if "ModelNew" in dir():
+        print("INSTANTIATE_OK")
+    else:
+        print("NO_MODELNEW", file=sys.stderr)
+        sys.exit(1)
+except Exception as e:
+    print(f"INSTANTIATE_FAIL: {{e}}", file=sys.stderr)
+    sys.exit(1)
+'''
+
+
+def _build_cuda_verify_script(generated_code: str, reference_code: str) -> str:
+    """构建完整验证脚本：编译 + 实例化 + forward + 输出对比。"""
+    code_hash = hashlib.md5(generated_code.encode()).hexdigest()[:8]
+    patched_code = re.sub(
+        r'(load_inline\s*\(\s*name\s*=\s*["\'])(\w+)(["\'])',
+        rf'\1\2_{code_hash}\3',
+        generated_code,
+    )
+    return f'''import torch
+import torch.nn as nn
+import sys
+import os
+os.environ.setdefault("TORCH_CPP_LOG_LEVEL", "ERROR")
+
+try:
+    # 1. 执行 reference 代码（定义 Model, get_inputs, get_init_inputs）
+    _ref_ns = {{}}
+    exec("""{reference_code.replace(chr(92), chr(92)*2).replace('"', chr(92)+'"')}""", _ref_ns)
+    Model = _ref_ns["Model"]
+    get_inputs = _ref_ns["get_inputs"]
+    get_init_inputs = _ref_ns["get_init_inputs"]
+
+    # 2. 执行生成代码（定义 ModelNew）
+    _gen_ns = {{"torch": torch, "nn": nn}}
+    _gen_ns.update({{k: v for k, v in _ref_ns.items() if not k.startswith("_")}})
+{textwrap.indent(patched_code, "    ")}
+    _gen_ns["ModelNew"] = ModelNew
+
+    # 3. 实例化
+    init_inputs = get_init_inputs()
+    model_ref = Model(*init_inputs).cuda().eval()
+    model_new = ModelNew(*init_inputs).cuda().eval()
+
+    # 4. 尝试 load_state_dict
+    try:
+        model_new.load_state_dict(model_ref.state_dict())
+    except Exception:
+        pass  # 一些 ModelNew 可能结构不完全匹配
+
+    # 5. Forward
+    inputs = [x.cuda() if isinstance(x, torch.Tensor) else x for x in get_inputs()]
+    with torch.no_grad():
+        out_ref = model_ref(*inputs)
+        out_new = model_new(*inputs)
+
+    # 6. Shape 检查
+    if isinstance(out_ref, torch.Tensor) and isinstance(out_new, torch.Tensor):
+        if out_ref.shape != out_new.shape:
+            print(f"SHAPE_MISMATCH: ref={{out_ref.shape}} new={{out_new.shape}}")
+            sys.exit(0)  # 返回码 0 但输出 SHAPE_MISMATCH
+        # 7. 值检查
+        try:
+            torch.testing.assert_close(out_ref, out_new, rtol=1e-2, atol=1e-2)
+            print("VERIFY_OK")
+        except AssertionError:
+            print("VALUE_MISMATCH")
+    elif isinstance(out_ref, (tuple, list)) and isinstance(out_new, (tuple, list)):
+        all_ok = True
+        for i, (r, n) in enumerate(zip(out_ref, out_new)):
+            if isinstance(r, torch.Tensor) and isinstance(n, torch.Tensor):
+                if r.shape != n.shape:
+                    print(f"SHAPE_MISMATCH_{{i}}")
+                    all_ok = False
+                    break
+                try:
+                    torch.testing.assert_close(r, n, rtol=1e-2, atol=1e-2)
+                except AssertionError:
+                    print(f"VALUE_MISMATCH_{{i}}")
+                    all_ok = False
+                    break
+        if all_ok:
+            print("VERIFY_OK")
+    else:
+        print("VERIFY_OK")  # 非 Tensor 输出不做检查
+
+except Exception as e:
+    print(f"VERIFY_FAIL: {{e}}", file=sys.stderr)
+    sys.exit(1)
+'''
+
+
+def _run_subprocess(script: str, timeout: int) -> subprocess.CompletedProcess:
+    """在临时文件中运行 Python 脚本，返回 CompletedProcess。"""
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False, dir="/tmp"
+        ) as f:
+            f.write(script)
+            tmp_path = f.name
+        return subprocess.run(
+            ["python", tmp_path],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+# ============================================================
+# CUDA Reward（训练时，三阶段混合评分）
+# ============================================================
+
+def compute_score_cuda(
+    data_source: str,
+    solution_str: str,
+    ground_truth,
+    extra_info: Optional[dict] = None,
+    compile_timeout: int = 120,
+    run_timeout: int = 60,
+    **kwargs,
+) -> float:
+    """
+    CUDA compile+run reward。三阶段混合评分。
+
+    Phase 1 (静态分析, <1ms/sample):
+      0.0  - 无代码块
+      0.05 - 有代码但无有效定义
+      0.1  - 语法错误
+      0.15 - 无 ModelNew 类
+      0.2  - ModelNew 但非 nn.Module 子类
+      0.3  - 无 load_inline / CUDA kernel
+      0.4  - 有 CUDA kernel 但缺 cpp_sources/cuda_sources/functions 三件套
+      0.5  - 完整结构但未编译
+
+    Phase 2 (编译验证, ~10-60s/sample, 需 nvcc+GPU):
+      0.6  - load_inline() 编译成功
+      0.7  - ModelNew 可实例化
+
+    Phase 3 (运行验证, ~5-30s/sample, 需 GPU):
+      0.8  - forward pass 无错误
+      0.9  - 输出 shape 匹配
+      1.0  - 输出值匹配（rtol=1e-2, atol=1e-2）
+    """
+    # ---- Phase 1: 静态分析 ----
+    code = extract_code_block(solution_str)
+    if code is None:
+        return 0.0
+
+    if not has_valid_definition(code):
+        return 0.05
+
+    if not check_syntax(code):
+        return 0.1
+
+    if not re.search(r"class\s+ModelNew", code):
+        return 0.15
+
+    if not has_modelnew_class(code):
+        return 0.2
+
+    if not has_cuda_kernel(code):
+        return 0.3
+
+    if not has_proper_cuda_structure(code):
+        return 0.4
+
+    # 静态分析通过 → score=0.5，进入编译阶段
+    # ---- Phase 2: 编译验证 ----
+    try:
+        compile_script = _build_cuda_compile_script(code)
+        proc = _run_subprocess(compile_script, timeout=compile_timeout)
+        if proc.returncode != 0 or "COMPILE_OK" not in proc.stdout:
+            return 0.5
+    except subprocess.TimeoutExpired:
+        return 0.5
+    except Exception:
+        return 0.5
+
+    # 编译成功 → score=0.6
+    # ModelNew 实例化检查（如果有 reference code）
+    reference_code = None
+    if isinstance(ground_truth, dict):
+        reference_code = ground_truth.get("model_code", "")
+
+    if not reference_code:
+        return 0.7  # 无 reference，无法做运行验证
+
+    # ---- Phase 3: 运行验证 ----
+    try:
+        verify_script = _build_cuda_verify_script(code, reference_code)
+        proc = _run_subprocess(verify_script, timeout=run_timeout)
+        stdout = proc.stdout.strip()
+
+        if "VERIFY_OK" in stdout:
+            return 1.0
+        elif "VALUE_MISMATCH" in stdout:
+            return 0.9  # shape 对但值不对
+        elif "SHAPE_MISMATCH" in stdout:
+            return 0.8  # forward 能跑但 shape 不对
+        elif proc.returncode == 0:
+            return 0.8  # forward 无错误
+        else:
+            return 0.7  # 编译成功但实例化/运行失败
+    except subprocess.TimeoutExpired:
+        return 0.7  # 运行超时，至少编译通过了
+    except Exception:
+        return 0.7
 
 
 # ============================================================
@@ -502,15 +790,28 @@ def compute_score_auto(
     自动路由 reward 函数。
 
     根据 ground_truth 格式自动选择：
-    - dict with "task_id" → compute_score_modelnew（KernelBench 任务）
-    - dict with "format"="modelnew" → compute_score_modelnew（KernelBook ModelNew 格式）
-    - dict with "format"="original" → compute_score（KernelBook 原始格式）
-    - str → compute_score（KernelBook 原始格式）
+    - dict with "task_id" + "backend"="cuda" → compute_score_cuda（CUDA compile+run）
+    - dict with "task_id" → compute_score_cuda（KernelBench 默认 CUDA）
+    - dict with "format"="cuda" → compute_score_cuda
+    - dict with "format"="modelnew" → compute_score_modelnew（Triton ModelNew）
+    - dict with "format"="original" → compute_score（Triton 原始格式）
+    - str → compute_score（Triton 原始格式）
     """
     if isinstance(ground_truth, dict):
+        # CUDA 后端：KernelBench 任务（默认走 CUDA compile+run）
         if "task_id" in ground_truth:
-            # KernelBench 任务
-            return compute_score_modelnew(
+            backend = ground_truth.get("backend", "cuda")
+            if backend == "cuda":
+                return compute_score_cuda(
+                    data_source, solution_str, ground_truth, extra_info, **kwargs
+                )
+            else:
+                return compute_score_modelnew(
+                    data_source, solution_str, ground_truth, extra_info, **kwargs
+                )
+        # 显式标记 CUDA 格式
+        if ground_truth.get("format") == "cuda":
+            return compute_score_cuda(
                 data_source, solution_str, ground_truth, extra_info, **kwargs
             )
         if ground_truth.get("format") == "modelnew":

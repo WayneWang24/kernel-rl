@@ -13,7 +13,7 @@ import sys
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 REWARD_FN_PATH = os.path.join(PROJECT_DIR, "src", "reward", "kernel_reward.py")
 
-# 确保不设置 expandable_segments（与 vLLM memory pool 不兼容）
+# 确保不设置 expandable_segments（与 SGLang/vLLM memory pool 不兼容）
 os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
 
 
@@ -564,7 +564,7 @@ def apply_all_patches(project_dir=PROJECT_DIR, optim_tolerant=False):
     if optim_tolerant:
         clean_verl_optim_patch()
         patch_verl_optim_tolerant()
-    prepare_checkpoint_resume(os.path.join(project_dir, "checkpoints", "grpo"))
+    prepare_checkpoint_resume(os.path.join(project_dir, "checkpoints", "grpo_cuda"))
     print("[patches] All patches applied successfully")
 
 
@@ -572,8 +572,13 @@ def apply_all_patches(project_dir=PROJECT_DIR, optim_tolerant=False):
 # Main: 数据探测 + 补丁 + 启动训练
 # ============================================================
 def main():
-    # Step 1: 数据路径
-    if os.path.isfile(f"{PROJECT_DIR}/data/split/rl/train.parquet"):
+    # Step 1: 数据路径（优先 CUDA 数据）
+    if os.path.isfile(f"{PROJECT_DIR}/data/rl_kernelbench_cuda/train.parquet"):
+        train_path = f"{PROJECT_DIR}/data/rl_kernelbench_cuda/train.parquet"
+        val_path = f"{PROJECT_DIR}/data/rl_kernelbench_cuda/val.parquet"
+        reward_fn_name = "compute_score_auto"
+        print("Using KernelBench CUDA RL data (compile+run reward)")
+    elif os.path.isfile(f"{PROJECT_DIR}/data/split/rl/train.parquet"):
         train_path = f"{PROJECT_DIR}/data/split/rl/train.parquet"
         val_path = f"{PROJECT_DIR}/data/split/rl/val.parquet"
         reward_fn_name = "compute_score_auto"
@@ -582,7 +587,7 @@ def main():
         train_path = f"{PROJECT_DIR}/data/rl_kernelbench/train.parquet"
         val_path = f"{PROJECT_DIR}/data/rl_kernelbench/val.parquet"
         reward_fn_name = "compute_score_auto"
-        print("Using KernelBench RL data (ModelNew format)")
+        print("Using KernelBench RL data (Triton format)")
     else:
         train_path = f"{PROJECT_DIR}/data/rl/train.parquet"
         val_path = f"{PROJECT_DIR}/data/rl/val.parquet"
@@ -633,10 +638,15 @@ def main():
         # 禁用 Adam foreach 优化，避免 _foreach_sqrt 产生 ~14GB 临时内存峰值
         "+actor_rollout_ref.actor.optim.override_optimizer_config.foreach=false",
         "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1",
+        "actor_rollout_ref.rollout.name=sglang",
         "actor_rollout_ref.rollout.tensor_model_parallel_size=1",
-        "actor_rollout_ref.rollout.name=vllm",
+        "actor_rollout_ref.rollout.pipeline_model_parallel_size=1",
         "actor_rollout_ref.rollout.gpu_memory_utilization=0.30",
-        "actor_rollout_ref.rollout.max_model_len=6144",
+        "actor_rollout_ref.rollout.free_cache_engine=true",
+        "actor_rollout_ref.rollout.enforce_eager=false",
+        "actor_rollout_ref.rollout.max_num_seqs=8",
+        "+actor_rollout_ref.rollout.engine_kwargs.sglang.attention_backend=flashinfer",
+        "+actor_rollout_ref.rollout.engine_kwargs.sglang.cuda_graph_max_bs=8",
         "actor_rollout_ref.rollout.n=3",
         # ref model 已禁用（use_kl_loss=false + use_kl_in_reward=false）
         "algorithm.use_kl_in_reward=false",
@@ -645,8 +655,8 @@ def main():
         "trainer.critic_warmup=0",
         'trainer.logger=["console"]',
         "trainer.project_name=kernel_rl",
-        "trainer.experiment_name=grpo_qwen25_coder_3b",
-        f"trainer.default_local_dir={PROJECT_DIR}/checkpoints/grpo",
+        "trainer.experiment_name=grpo_cuda_sglang_2gpu",
+        f"trainer.default_local_dir={PROJECT_DIR}/checkpoints/grpo_cuda",
         "trainer.n_gpus_per_node=2",
         "trainer.nnodes=1",
         "trainer.save_freq=200",

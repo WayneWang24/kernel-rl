@@ -21,29 +21,23 @@ import argparse
 import json
 import os
 import re
+import sys
 from pathlib import Path
 
 import pandas as pd
 
+# 添加项目根目录以 import 集中 prompt 模板
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.dirname(os.path.dirname(SCRIPT_DIR))
+sys.path.insert(0, PROJECT_DIR)
 
-PROMPT_TEMPLATE = """You are an expert Performance Engineer specializing in Triton and PyTorch internals.
+from src.prompts.cuda_prompt import CUDA_PROMPT_TEMPLATE, TRITON_PROMPT_TEMPLATE
 
-### TASK
-Optimize the provided architecture named `Model` by replacing standard PyTorch operators with custom Triton kernels.
-
-### RULES
-1. Name the optimized output architecture `ModelNew`.
-2. Preserve `__init__` structure (nn.Module definitions) for state_dict compatibility.
-3. In `forward`, access underlying parameters (e.g., self.conv.weight) and pass them to your custom Triton kernels. Do NOT call module objects directly.
-4. Use @triton.jit for kernel functions, include proper wrapper functions.
-5. Generate REAL, compilable code with all imports. Output ONLY the code block.
-
-### Input Architecture
-```python
-{model_code}
-```
-
-### Optimized Triton Implementation:"""
+# 默认使用 CUDA prompt；通过 --backend triton 切换
+PROMPT_TEMPLATES = {
+    "cuda": CUDA_PROMPT_TEMPLATE,
+    "triton": TRITON_PROMPT_TEMPLATE,
+}
 
 
 def parse_task_file(filepath: Path) -> dict:
@@ -64,21 +58,23 @@ def parse_task_file(filepath: Path) -> dict:
     }
 
 
-def build_rl_record(task: dict) -> dict:
+def build_rl_record(task: dict, backend: str = "cuda") -> dict:
     """将单个任务转为 verl RL 格式。"""
-    prompt_text = PROMPT_TEMPLATE.format(model_code=task["model_code"].strip())
+    prompt_template = PROMPT_TEMPLATES[backend]
+    prompt_text = prompt_template.format(model_code=task["model_code"].strip())
 
     ground_truth = {
         "task_id": task["task_id"],
         "level": task["level"],
         "ref_filepath": task["ref_filepath"],
         "model_code": task["model_code"],
+        "backend": backend,
     }
 
     return {
         "data_source": "kernelbench",
         "prompt": [{"role": "user", "content": prompt_text}],
-        "ability": "triton_kernel_modelnew",
+        "ability": f"{backend}_kernel_modelnew",
         "reward_model": {
             "style": "rule",
             "ground_truth": ground_truth,
@@ -86,6 +82,7 @@ def build_rl_record(task: dict) -> dict:
         "extra_info": {
             "task_id": task["task_id"],
             "level": task["level"],
+            "backend": backend,
         },
     }
 
@@ -133,6 +130,12 @@ def main():
         default="data/rl_kernelbench",
         help="Output directory for parquet files",
     )
+    parser.add_argument(
+        "--backend",
+        choices=["cuda", "triton"],
+        default="cuda",
+        help="Backend for prompt template (default: cuda)",
+    )
     args = parser.parse_args()
 
     kernelbench_dir = Path(args.kernelbench_dir)
@@ -151,7 +154,7 @@ def main():
     # 转换并保存
     print("\nConverting to RL format...")
     for split_name, split_tasks in splits.items():
-        records = [build_rl_record(t) for t in split_tasks]
+        records = [build_rl_record(t, backend=args.backend) for t in split_tasks]
         df = pd.DataFrame(records)
         output_path = output_dir / f"{split_name}.parquet"
         df.to_parquet(output_path, index=False)

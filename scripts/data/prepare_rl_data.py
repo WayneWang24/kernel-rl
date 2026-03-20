@@ -25,25 +25,12 @@ from typing import Tuple
 
 import pandas as pd
 
-# 复用 SFT 脚本的 prompt 模板和 split 函数
+# 添加项目根目录
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
+from src.prompts.cuda_prompt import TRITON_ORIGINAL_PROMPT_TEMPLATE
 
-PROMPT_TEMPLATE = """You are an expert GPU programmer specializing in Triton kernel development. Your task is to convert the following PyTorch code into an optimized Triton kernel implementation.
-
-## Requirements:
-1. The Triton kernel must be functionally equivalent to the PyTorch code
-2. Use @triton.jit decorator for kernel functions
-3. Include a Python wrapper function that calls the Triton kernel
-4. Optimize for GPU performance (memory coalescing, optimal block sizing, etc.)
-5. Include proper imports (triton, triton.language as tl, torch, etc.)
-
-## PyTorch Code:
-```python
-{python_code}
-```
-
-## Optimized Triton Implementation:"""
+PROMPT_TEMPLATE = TRITON_ORIGINAL_PROMPT_TEMPLATE
 
 
 def split_by_repo(

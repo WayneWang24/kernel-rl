@@ -42,27 +42,13 @@ PROJECT_DIR = SCRIPT_DIR.parent.parent
 # 添加项目根目录
 sys.path.insert(0, str(PROJECT_DIR))
 from src.reward.kernel_reward import extract_code_block
+from src.prompts.cuda_prompt import CUDA_PROMPT_TEMPLATE, TRITON_PROMPT_TEMPLATE
 
-
-# 与训练一致的 prompt 模板
-PROMPT_TEMPLATE = """You are an expert Performance Engineer specializing in Triton and PyTorch internals.
-
-### TASK
-Optimize the provided architecture named `Model` by replacing standard PyTorch operators with custom Triton kernels.
-
-### RULES
-1. Name the optimized output architecture `ModelNew`.
-2. Preserve `__init__` structure (nn.Module definitions) for state_dict compatibility.
-3. In `forward`, access underlying parameters (e.g., self.conv.weight) and pass them to your custom Triton kernels. Do NOT call module objects directly.
-4. Use @triton.jit for kernel functions, include proper wrapper functions.
-5. Generate REAL, compilable code with all imports. Output ONLY the code block.
-
-### Input Architecture
-```python
-{model_code}
-```
-
-### Optimized Triton Implementation:"""
+# 默认使用 CUDA prompt；通过 --backend triton 切换
+PROMPT_TEMPLATES = {
+    "cuda": CUDA_PROMPT_TEMPLATE,
+    "triton": TRITON_PROMPT_TEMPLATE,
+}
 
 
 def collect_tasks(kernelbench_data_dir: Path, levels: list) -> list:
@@ -98,8 +84,11 @@ def generate_solutions(
     output_dir: Path,
     max_tokens: int = 8192,
     temperature: float = 0.0,
+    prompt_template: str = None,
 ) -> dict:
-    """阶段 A：通过 vLLM API 生成 ModelNew 代码，保存为 generated_kernels.py。"""
+    """阶段 A：通过 API 生成 ModelNew 代码，保存为 generated_kernels.py。"""
+    if prompt_template is None:
+        prompt_template = PROMPT_TEMPLATES["cuda"]
     results = {}
 
     for i, task in enumerate(tasks):
@@ -107,7 +96,7 @@ def generate_solutions(
         level = task["level"]
         print(f"  [{i + 1}/{len(tasks)}] Level {level} / {task_id}...", end=" ", flush=True)
 
-        prompt = PROMPT_TEMPLATE.format(model_code=task["model_code"].strip())
+        prompt = prompt_template.format(model_code=task["model_code"].strip())
 
         payload = {
             "model": model_name,
@@ -268,6 +257,9 @@ def main():
     parser.add_argument("--rtol", type=float, default=1e-2)
     parser.add_argument("--atol", type=float, default=1e-2)
 
+    # 后端选择
+    parser.add_argument("--backend", choices=["cuda", "triton"], default="cuda", help="Backend for prompt template")
+
     # 模式选择
     parser.add_argument("--generate_only", action="store_true", help="Only generate, skip evaluation")
     parser.add_argument("--eval_only", action="store_true", help="Only evaluate existing results")
@@ -300,6 +292,7 @@ def main():
             output_dir=output_dir / args.run_name,
             max_tokens=args.max_tokens,
             temperature=args.temperature,
+            prompt_template=PROMPT_TEMPLATES[args.backend],
         )
 
         # 保存生成摘要

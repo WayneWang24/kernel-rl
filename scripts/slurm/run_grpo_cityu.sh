@@ -36,7 +36,7 @@ PROJECT_DIR="${HOME}/ChenweiWang/workspace/kernel-rl"
 mkdir -p "${PROJECT_DIR}/logs"
 
 # ===== 环境变量 =====
-export VLLM_ATTENTION_BACKEND=FLASH_ATTN
+# SGLang 使用 flashinfer，无需 VLLM_ATTENTION_BACKEND
 export RAY_memory_monitor_refresh_ms=0
 export HYDRA_FULL_ERROR=1
 export PYTHONUNBUFFERED=1
@@ -44,7 +44,7 @@ export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export TORCHDYNAMO_DISABLE=1
 
-# 禁用 expandable_segments（与 vLLM memory pool 不兼容）
+# 禁用 expandable_segments（与 SGLang/vLLM memory pool 不兼容）
 unset PYTORCH_CUDA_ALLOC_CONF
 # 清除 ROCm 变量（SLURM 可能自动设置，与 CUDA_VISIBLE_DEVICES 冲突）
 unset ROCR_VISIBLE_DEVICES
@@ -128,7 +128,13 @@ srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     ray status
 
 # ===== Step 3: 数据路径探测 =====
-if [ -f "${PROJECT_DIR}/data/split/rl/train.parquet" ]; then
+# 优先 CUDA 数据 → KernelBook split → KernelBench Triton → KernelBook 原始
+if [ -f "${PROJECT_DIR}/data/rl_kernelbench_cuda/train.parquet" ]; then
+    TRAIN_PATH="${PROJECT_DIR}/data/rl_kernelbench_cuda/train.parquet"
+    VAL_PATH="${PROJECT_DIR}/data/rl_kernelbench_cuda/val.parquet"
+    REWARD_FN_NAME="compute_score_auto"
+    echo "Using KernelBench CUDA RL data (compile+run reward)"
+elif [ -f "${PROJECT_DIR}/data/split/rl/train.parquet" ]; then
     TRAIN_PATH="${PROJECT_DIR}/data/split/rl/train.parquet"
     VAL_PATH="${PROJECT_DIR}/data/split/rl/val.parquet"
     REWARD_FN_NAME="compute_score_auto"
@@ -137,7 +143,7 @@ elif [ -f "${PROJECT_DIR}/data/rl_kernelbench/train.parquet" ]; then
     TRAIN_PATH="${PROJECT_DIR}/data/rl_kernelbench/train.parquet"
     VAL_PATH="${PROJECT_DIR}/data/rl_kernelbench/val.parquet"
     REWARD_FN_NAME="compute_score_auto"
-    echo "Using KernelBench RL data (ModelNew format)"
+    echo "Using KernelBench RL data (Triton format)"
 elif [ -f "${PROJECT_DIR}/data/rl/train.parquet" ]; then
     TRAIN_PATH="${PROJECT_DIR}/data/rl/train.parquet"
     VAL_PATH="${PROJECT_DIR}/data/rl/val.parquet"
@@ -197,12 +203,16 @@ PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     actor_rollout_ref.actor.fsdp_config.param_offload=false \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=false \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
+    actor_rollout_ref.rollout.name=sglang \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
-    actor_rollout_ref.rollout.name=vllm \
-    actor_rollout_ref.rollout.load_format=safetensors \
-    ++actor_rollout_ref.rollout.layered_summon=true \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.50 \
-    actor_rollout_ref.rollout.max_model_len=4096 \
+    actor_rollout_ref.rollout.pipeline_model_parallel_size=1 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
+    actor_rollout_ref.rollout.free_cache_engine=true \
+    actor_rollout_ref.rollout.enforce_eager=false \
+    actor_rollout_ref.rollout.max_num_seqs=16 \
+    "+actor_rollout_ref.rollout.engine_kwargs.sglang.attention_backend=flashinfer" \
+    "+actor_rollout_ref.rollout.engine_kwargs.sglang.cuda_graph_max_bs=16" \
+    "+actor_rollout_ref.rollout.engine_kwargs.sglang.chunked_prefill_size=4096" \
     actor_rollout_ref.rollout.n=5 \
     algorithm.use_kl_in_reward=false \
     custom_reward_function.path="$REWARD_FN_PATH" \
@@ -210,8 +220,8 @@ PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     trainer.critic_warmup=0 \
     trainer.logger='["console"]' \
     trainer.project_name=kernel_rl \
-    trainer.experiment_name=grpo_qwen25_coder_7b_9gpu_lora \
-    trainer.default_local_dir="${PROJECT_DIR}/checkpoints/grpo_lora" \
+    trainer.experiment_name=grpo_cuda_sglang_9gpu \
+    trainer.default_local_dir="${PROJECT_DIR}/checkpoints/grpo_cuda" \
     trainer.n_gpus_per_node=3 \
     trainer.nnodes=3 \
     trainer.save_freq=50 \
