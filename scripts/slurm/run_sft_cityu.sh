@@ -43,6 +43,14 @@ unset ROCR_VISIBLE_DEVICES
 export NCCL_P2P_DISABLE=1
 export NCCL_IB_DISABLE=1
 
+# ===== 应用 verl 补丁（PyTorch 2.4 兼容） =====
+echo "=== Applying verl patches ==="
+python -c "
+import sys; sys.path.insert(0, '${PROJECT_DIR}/scripts/train')
+from launch_grpo import patch_verl_fsdp_clip_grad
+patch_verl_fsdp_clip_grad()
+"
+
 # ===== 数据路径 =====
 if [ -f "${PROJECT_DIR}/data/split/sft/train.parquet" ]; then
     TRAIN_PATH="${PROJECT_DIR}/data/split/sft/train.parquet"

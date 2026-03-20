@@ -545,6 +545,84 @@ def patch_verl_rocr_fix():
 
 
 # ============================================================
+# Step 7: 补丁 fsdp2_clip_grad_norm_（PyTorch 2.4 兼容）
+#
+# verl 0.7.0 的 fsdp2_clip_grad_norm_ 依赖 PyTorch 2.5+ 的
+# _clip_grads_with_norm_ 和 _get_total_norm。
+# PyTorch 2.4 没有这两个函数，需要用兼容实现替换整个函数。
+# ============================================================
+def patch_verl_fsdp_clip_grad():
+    """为 PyTorch 2.4 提供 fsdp2_clip_grad_norm_ 兼容实现。"""
+    # 先检查是否需要补丁
+    try:
+        from torch.nn.utils.clip_grad import _clip_grads_with_norm_
+        print("[patch_fsdp_clip_grad] PyTorch has _clip_grads_with_norm_, no patch needed")
+        return
+    except ImportError:
+        pass
+
+    fpath = _find_module_file("verl.utils.fsdp_utils")
+    with open(fpath, "r") as f:
+        content = f.read()
+
+    if "# PATCHED: fsdp2_clip_grad_norm_ compat" in content:
+        print("[patch_fsdp_clip_grad] Already patched")
+        return
+
+    # 替换整个 fsdp2_clip_grad_norm_ 函数
+    old_func = '''def fsdp2_clip_grad_norm_(parameters, max_norm, norm_type=2.0, error_if_nonfinite=False, foreach=None):
+    """torch.nn.utils.clip_grad_norm_ cann't run on cpu parameter DTensor"""
+    from torch.nn.utils.clip_grad import _clip_grads_with_norm_, _get_total_norm
+
+    if isinstance(parameters, torch.Tensor):
+        parameters = [parameters]
+    else:
+        # prevent generators from being exhausted
+        parameters = list(parameters)
+    grads = [p.grad for p in parameters if p.grad is not None]
+    total_norm = _get_total_norm(grads, norm_type, error_if_nonfinite, foreach)
+    total_norm = total_norm.to(get_device_id(), non_blocking=True)
+    _clip_grads_with_norm_(parameters, max_norm, total_norm, foreach)
+    return total_norm'''
+
+    new_func = '''def fsdp2_clip_grad_norm_(parameters, max_norm, norm_type=2.0, error_if_nonfinite=False, foreach=None):
+    # PATCHED: fsdp2_clip_grad_norm_ compat for PyTorch 2.4
+    """torch.nn.utils.clip_grad_norm_ - compatible with PyTorch 2.4+"""
+    if isinstance(parameters, torch.Tensor):
+        parameters = [parameters]
+    else:
+        parameters = list(parameters)
+    max_norm = float(max_norm)
+    norm_type = float(norm_type)
+    grads = [p.grad for p in parameters if p.grad is not None]
+    if len(grads) == 0:
+        return torch.tensor(0.0)
+    if norm_type == float('inf'):
+        norms = [g.detach().abs().max() for g in grads]
+        total_norm = norms[0] if len(norms) == 1 else torch.max(torch.stack(norms))
+    else:
+        total_norm = torch.norm(torch.stack([torch.norm(g.detach(), norm_type) for g in grads]), norm_type)
+    if error_if_nonfinite and torch.logical_or(total_norm.isnan(), total_norm.isinf()):
+        raise RuntimeError(f"total_norm is {total_norm}")
+    total_norm = total_norm.to(get_device_id(), non_blocking=True)
+    clip_coef = max_norm / (total_norm + 1e-6)
+    clip_coef_clamped = torch.clamp(clip_coef, max=1.0)
+    for p in parameters:
+        if p.grad is not None:
+            p.grad.detach().mul_(clip_coef_clamped)
+    return total_norm'''
+
+    if old_func not in content:
+        print("[patch_fsdp_clip_grad] WARNING: original function not found, skipping")
+        return
+
+    content = content.replace(old_func, new_func)
+    with open(fpath, "w") as f:
+        f.write(content)
+    print(f"[patch_fsdp_clip_grad] Patched {fpath}")
+
+
+# ============================================================
 # 公共辅助：应用所有补丁
 # ============================================================
 def apply_all_patches(project_dir=PROJECT_DIR, optim_tolerant=False):
@@ -553,6 +631,7 @@ def apply_all_patches(project_dir=PROJECT_DIR, optim_tolerant=False):
     Args:
         optim_tolerant: 是否打 optimizer 容错补丁（仅在从损坏 checkpoint 恢复时需要）
     """
+    patch_verl_fsdp_clip_grad()
     patch_verl_dtensor_compat()
     patch_verl_async_import()
     patch_verl_skip_agent_loop()
