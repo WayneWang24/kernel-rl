@@ -50,6 +50,13 @@ unset PYTORCH_CUDA_ALLOC_CONF
 # 清除 ROCm 变量
 unset ROCR_VISIBLE_DEVICES
 
+# 确保 CUDA 设备可见（SLURM 可能未正确传递到 Ray worker）
+if [ -z "${CUDA_VISIBLE_DEVICES:-}" ]; then
+    export CUDA_VISIBLE_DEVICES=0,1,2
+fi
+echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
+export WANDB_MODE=disabled
+
 # NCCL 修复：PCIe A100 之间 P2P 可能不可用，禁用后走 SHM
 export NCCL_P2P_DISABLE=1
 export NCCL_IB_DISABLE=1
