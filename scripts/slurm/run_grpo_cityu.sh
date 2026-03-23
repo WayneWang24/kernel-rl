@@ -2,7 +2,7 @@
 # ============================================================
 # CityU HPC SLURM 作业脚本 — GRPO 训练
 #
-# 硬件：3 节点 × 3× A100 40GB = 9 GPU
+# 硬件：2 节点 × 3× A100 40GB = 6 GPU
 # 分区：gpu3
 #
 # 用法：
@@ -15,7 +15,7 @@
 
 #SBATCH --job-name=kernel-rl-grpo
 #SBATCH --partition=gpu3
-#SBATCH --nodes=3
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=3
 #SBATCH --cpus-per-task=16
@@ -91,9 +91,43 @@ echo "  kernel-rl GRPO Training (CityU HPC)"
 echo "============================================"
 echo "Head node:    $head_node ($head_node_ip)"
 echo "Nodes:        $SLURM_JOB_NUM_NODES"
-echo "GPUs/node:    $SLURM_GPUS_PER_NODE"
-echo "Total GPUs:   $((SLURM_JOB_NUM_NODES * SLURM_GPUS_PER_NODE))"
+echo "GPUs/node:    $SLURM_GPUS_PER_NODE (requested)"
 echo "============================================"
+
+# ===== Step 0.5: Per-node GPU health check =====
+echo ""
+echo "=== GPU Health Check (all nodes) ==="
+GPU_CHECK_DIR="${PROJECT_DIR}/logs/gpu_check_${SLURM_JOB_ID}"
+for node in "${nodes_array[@]}"; do
+    echo "Checking $node..."
+    srun --nodes=1 --ntasks=1 -w "$node" \
+        python3 "${PROJECT_DIR}/scripts/slurm/check_node_gpus.py" "$GPU_CHECK_DIR" "$node"
+done
+
+# Read results and find minimum working GPUs across nodes
+MIN_GPUS=99
+for node in "${nodes_array[@]}"; do
+    GPU_FILE="${GPU_CHECK_DIR}/${node}.txt"
+    if [ -f "$GPU_FILE" ]; then
+        GPU_IDS=$(cat "$GPU_FILE" | tr -d '\n')
+        NUM=$(echo "$GPU_IDS" | tr ',' '\n' | wc -l | tr -d ' ')
+        echo "  $node: $NUM working GPUs (CVD=$GPU_IDS)"
+        if [ "$NUM" -lt "$MIN_GPUS" ]; then MIN_GPUS=$NUM; fi
+    else
+        echo "  WARNING: No GPU info for $node"
+        MIN_GPUS=0
+    fi
+done
+
+if [ "$MIN_GPUS" -lt 2 ]; then
+    echo "ERROR: Need at least 2 working GPUs per node, min found: $MIN_GPUS"
+    exit 1
+fi
+
+GPUS_PER_NODE=$MIN_GPUS
+TOTAL_GPUS=$((GPUS_PER_NODE * SLURM_JOB_NUM_NODES))
+echo ""
+echo "Using $GPUS_PER_NODE GPUs/node × $SLURM_JOB_NUM_NODES nodes = $TOTAL_GPUS total GPUs"
 
 # ===== Step 1: 在 head 节点上应用 verl 补丁 =====
 # launch_grpo.py 里的补丁会修改 pip 安装的 verl 文件
@@ -107,21 +141,29 @@ from launch_grpo import apply_all_patches
 apply_all_patches('${PROJECT_DIR}')
 "
 
-# ===== Step 2: 启动 Ray 集群 =====
+# ===== Step 2: 启动 Ray 集群（使用检测到的 GPU）=====
+# 每个节点只暴露检测通过的 GPU，截断到 MIN_GPUS 保持一致
+HEAD_GPUS_ALL=$(cat "${GPU_CHECK_DIR}/${head_node}.txt" | tr -d '\n')
+HEAD_CVD=$(echo "$HEAD_GPUS_ALL" | tr ',' '\n' | head -$GPUS_PER_NODE | paste -sd,)
+
 echo ""
-echo "=== Starting Ray HEAD at $head_node ==="
+echo "=== Starting Ray HEAD at $head_node (CVD=$HEAD_CVD, num_gpus=$GPUS_PER_NODE) ==="
 srun --nodes=1 --ntasks=1 -w "$head_node" \
+    env CUDA_VISIBLE_DEVICES="$HEAD_CVD" \
     ray start --head --node-ip-address="$head_node_ip" --port=$port \
-    --num-cpus "${SLURM_CPUS_PER_TASK}" --num-gpus "${SLURM_GPUS_PER_NODE}" --block &
+    --num-cpus "${SLURM_CPUS_PER_TASK}" --num-gpus "$GPUS_PER_NODE" --block &
 sleep 10
 
 worker_num=$((SLURM_JOB_NUM_NODES - 1))
 for ((i = 1; i <= worker_num; i++)); do
     node_i=${nodes_array[$i]}
-    echo "Starting Ray WORKER $i at $node_i"
+    WORKER_GPUS_ALL=$(cat "${GPU_CHECK_DIR}/${node_i}.txt" | tr -d '\n')
+    WORKER_CVD=$(echo "$WORKER_GPUS_ALL" | tr ',' '\n' | head -$GPUS_PER_NODE | paste -sd,)
+    echo "Starting Ray WORKER $i at $node_i (CVD=$WORKER_CVD, num_gpus=$GPUS_PER_NODE)"
     srun --nodes=1 --ntasks=1 -w "$node_i" \
+        env CUDA_VISIBLE_DEVICES="$WORKER_CVD" \
         ray start --address "$ip_head" \
-        --num-cpus "${SLURM_CPUS_PER_TASK}" --num-gpus "${SLURM_GPUS_PER_NODE}" --block &
+        --num-cpus "${SLURM_CPUS_PER_TASK}" --num-gpus "$GPUS_PER_NODE" --block &
     sleep 5
 done
 
@@ -176,12 +218,18 @@ fi
 
 REWARD_FN_PATH="${PROJECT_DIR}/src/reward/kernel_reward.py"
 
-# ===== Step 4: 启动 GRPO 训练 =====
+# ===== Step 4: 动态计算 batch size =====
+TRAIN_BS=$((TOTAL_GPUS * 4))
+MINI_BS=$TRAIN_BS
+
+# ===== Step 5: 启动 GRPO 训练 =====
 echo ""
 echo "=== Launching GRPO Training ==="
 echo "Model:     $MODEL_PATH"
 echo "Train:     $TRAIN_PATH"
 echo "Reward:    $REWARD_FN_NAME"
+echo "GPUs:      $TOTAL_GPUS ($GPUS_PER_NODE/node × $SLURM_JOB_NUM_NODES nodes)"
+echo "BatchSize: train=$TRAIN_BS mini=$MINI_BS"
 echo ""
 
 PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
@@ -189,7 +237,7 @@ PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     algorithm.adv_estimator=grpo \
     data.train_files="$TRAIN_PATH" \
     data.val_files="$VAL_PATH" \
-    data.train_batch_size=36 \
+    data.train_batch_size=$TRAIN_BS \
     data.max_prompt_length=2048 \
     data.max_response_length=4096 \
     data.filter_overlong_prompts=true \
@@ -197,7 +245,7 @@ PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     actor_rollout_ref.model.path="$MODEL_PATH" \
     actor_rollout_ref.actor.optim.lr=5e-5 \
     actor_rollout_ref.model.use_remove_padding=false \
-    actor_rollout_ref.actor.ppo_mini_batch_size=36 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=$MINI_BS \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.actor.use_kl_loss=false \
     actor_rollout_ref.actor.entropy_coeff=0 \
@@ -225,10 +273,10 @@ PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     trainer.critic_warmup=0 \
     trainer.logger='["console"]' \
     trainer.project_name=kernel_rl \
-    trainer.experiment_name=grpo_cuda_sglang_9gpu \
+    trainer.experiment_name=grpo_cuda_sglang_${TOTAL_GPUS}gpu \
     trainer.default_local_dir="${PROJECT_DIR}/checkpoints/grpo_cuda" \
-    trainer.n_gpus_per_node=3 \
-    trainer.nnodes=3 \
+    trainer.n_gpus_per_node=$GPUS_PER_NODE \
+    trainer.nnodes=$SLURM_JOB_NUM_NODES \
     trainer.save_freq=50 \
     trainer.test_freq=50 \
     trainer.max_actor_ckpt_to_keep=1 \
