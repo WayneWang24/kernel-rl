@@ -49,14 +49,18 @@ class GpuWorkerActor:
 
 
 if __name__ == "__main__":
+    # 清理残留 Ray 集群
+    os.system("ray stop --force 2>/dev/null")
+    os.environ.pop("RAY_ADDRESS", None)
+
     print("=" * 60)
     print("=== Main process GPU check ===")
     print("=" * 60)
     for k, v in check_gpu_env().items():
         print(f"  {k}: {v}")
 
-    print("\n=== Starting Ray ===")
-    ray.init()
+    print("\n=== Starting Ray (local cluster) ===")
+    ray.init(ignore_reinit_error=True)
     print(f"Ray resources: {ray.available_resources()}")
 
     print("\n=== No-GPU actor (simulates TaskRunner) ===")
