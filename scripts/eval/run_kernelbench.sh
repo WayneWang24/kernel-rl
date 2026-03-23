@@ -58,11 +58,12 @@ echo "Results dir: $RESULTS_DIR"
 
 # 启动 vLLM 服务（后台）
 echo "Starting vLLM server..."
-python -m vllm.entrypoints.openai.api_server \
+CUDA_VISIBLE_DEVICES=0 python -m vllm.entrypoints.openai.api_server \
     --model "$MODEL_PATH" \
-    --tensor-parallel-size 2 \
-    --gpu-memory-utilization 0.8 \
+    --tensor-parallel-size 1 \
+    --gpu-memory-utilization 0.85 \
     --max-model-len 6144 \
+    --dtype half \
     --port 8000 &
 VLLM_PID=$!
 
