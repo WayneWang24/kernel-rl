@@ -66,11 +66,46 @@ export NCCL_DEBUG=WARN
 ray stop --force 2>/dev/null || true
 unset RAY_ADDRESS
 
-# ===== Step 0.5: GPU 诊断 =====
-echo "=== GPU Diagnostics ==="
+# ===== Step 0.5: GPU 健康检查（逐个探测，跳过坏 GPU）=====
+echo "=== GPU Health Check ==="
 nvidia-smi || echo "WARNING: nvidia-smi not found or failed"
-python3 -c "import torch; print(f'torch.cuda.is_available()={torch.cuda.is_available()}, device_count={torch.cuda.device_count()}')"
-echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
+
+# 用 subprocess 逐个测试每个 GPU，因为 torch.cuda 初始化后不能重新加载
+WORKING_GPUS=$(python3 -c "
+import subprocess, sys, os
+total = int(os.environ.get('SLURM_GPUS_PER_NODE', '0') or '0')
+if total == 0:
+    import torch
+    total = torch.cuda.device_count()
+working = []
+for i in range(total):
+    r = subprocess.run(
+        [sys.executable, '-c',
+         f'import os; os.environ[\"CUDA_VISIBLE_DEVICES\"]=\"{i}\"; import torch; '
+         f'assert torch.cuda.is_available() and torch.cuda.device_count()>0, '
+         f'f\"GPU {i}: avail={torch.cuda.is_available()} count={torch.cuda.device_count()}\"'],
+        capture_output=True, timeout=30, text=True)
+    if r.returncode == 0:
+        working.append(str(i))
+        print(f'GPU {i}: OK')
+    else:
+        print(f'GPU {i}: FAILED - {r.stderr.strip().splitlines()[-1] if r.stderr.strip() else \"unknown\"}')
+print(f'WORKING_GPUS={len(working)}')
+print(','.join(working))
+" 2>&1)
+echo "$WORKING_GPUS"
+
+# 提取最后一行（逗号分隔的 GPU ID 列表）
+GPU_IDS=$(echo "$WORKING_GPUS" | tail -1)
+NUM_WORKING=$(echo "$GPU_IDS" | tr ',' '\n' | wc -l)
+
+if [ "$NUM_WORKING" -lt 2 ]; then
+    echo "ERROR: Need at least 2 working GPUs, found $NUM_WORKING"
+    exit 1
+fi
+
+export CUDA_VISIBLE_DEVICES="$GPU_IDS"
+echo "Using $NUM_WORKING working GPUs: CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 
 # ===== Step 1: 应用 verl 补丁 =====
 echo "=== Applying verl patches ==="
@@ -122,25 +157,28 @@ fi
 
 REWARD_FN_PATH="${PROJECT_DIR}/src/reward/kernel_reward.py"
 
-# ===== Step 3: 启动 GRPO 训练 =====
+# ===== Step 3: 动态计算 batch size =====
+# train_batch_size 必须能被 n_gpus 整除
+# ppo_mini_batch_size 必须能被 n_gpus 整除
+TRAIN_BS=$((NUM_WORKING * 4))    # 每 GPU 4 samples
+MINI_BS=$TRAIN_BS                # mini_batch = train_batch（GRPO 不需要多轮）
+
+# ===== Step 4: 启动 GRPO 训练 =====
 echo ""
-echo "=== Launching GRPO Training (1 node, 3 GPUs) ==="
+echo "=== Launching GRPO Training (1 node, ${NUM_WORKING} GPUs) ==="
 echo "Model:     $MODEL_PATH"
 echo "Train:     $TRAIN_PATH"
 echo "Reward:    $REWARD_FN_NAME"
+echo "GPUs:      $NUM_WORKING (CVD=$CUDA_VISIBLE_DEVICES)"
+echo "BatchSize: train=$TRAIN_BS mini=$MINI_BS"
 echo ""
 
 # 单节点不需要手动启动 Ray 集群，verl 会自动 ray.init()
-# 3× A100 40GB 跑 7B 内存计算（rollout phase）：
-#   - FSDP actor shard (bf16): 7B × 2 / 3 ≈ 4.7GB/GPU
-#   - SGLang model (full): ~14GB/GPU
-#   - SGLang KV cache: 0.60 × 40 - 14 ≈ 10GB/GPU
-#   - 总计: ~29GB/GPU → 40GB 内可以
 PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     data.train_files="$TRAIN_PATH" \
     data.val_files="$VAL_PATH" \
-    data.train_batch_size=12 \
+    data.train_batch_size=$TRAIN_BS \
     data.max_prompt_length=2048 \
     data.max_response_length=4096 \
     data.filter_overlong_prompts=true \
@@ -148,7 +186,7 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.model.path="$MODEL_PATH" \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=false \
-    actor_rollout_ref.actor.ppo_mini_batch_size=12 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=$MINI_BS \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.actor.use_kl_loss=false \
     actor_rollout_ref.actor.entropy_coeff=0 \
@@ -175,7 +213,7 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     trainer.project_name=kernel_rl \
     trainer.experiment_name=grpo_cuda_sglang_1node \
     trainer.default_local_dir="${PROJECT_DIR}/checkpoints/grpo_cuda" \
-    trainer.n_gpus_per_node=3 \
+    trainer.n_gpus_per_node=$NUM_WORKING \
     trainer.nnodes=1 \
     trainer.save_freq=200 \
     trainer.test_freq=200 \
