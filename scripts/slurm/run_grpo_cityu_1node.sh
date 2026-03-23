@@ -50,12 +50,19 @@ unset PYTORCH_CUDA_ALLOC_CONF
 # 清除 ROCm 变量
 unset ROCR_VISIBLE_DEVICES
 
-# 确保 CUDA 设备可见（SLURM 可能未正确传递到 Ray worker）
+# 确保 CUDA 设备可见
 if [ -z "${CUDA_VISIBLE_DEVICES:-}" ]; then
     export CUDA_VISIBLE_DEVICES=0,1,2
 fi
-echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 export WANDB_MODE=disabled
+
+# 【核心修复】禁止 Ray 覆盖 CUDA_VISIBLE_DEVICES
+# 根因：verl 创建 TaskRunner actor 时不请求 GPU，Ray 给它设 CUDA_VISIBLE_DEVICES=""，
+# 导致 TaskRunner 内 torch.cuda.is_available()=False → get_device_name()="cpu"，
+# 级联导致所有 worker 也不请求 GPU 资源。
+# 设置此变量后，所有 Ray 进程继承父进程的 CUDA_VISIBLE_DEVICES=0,1,2，
+# verl 自己的 _setup_env_cuda_visible_devices() 负责每个 worker 的 GPU 分配。
+export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1
 
 # NCCL 修复：PCIe A100 之间 P2P 可能不可用，禁用后走 SHM
 export NCCL_P2P_DISABLE=1
@@ -64,21 +71,13 @@ export NCCL_DEBUG=WARN
 
 # ===== Step 0: 清理残留 Ray 集群 =====
 ray stop --force 2>/dev/null || true
+unset RAY_ADDRESS
 
 # ===== Step 0.5: GPU 诊断 =====
 echo "=== GPU Diagnostics ==="
 nvidia-smi || echo "WARNING: nvidia-smi not found or failed"
 python3 -c "import torch; print(f'torch.cuda.is_available()={torch.cuda.is_available()}, device_count={torch.cuda.device_count()}')"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
-
-# ===== Step 0.6: 手动启动 Ray 并显式注册 GPU =====
-# verl 的 ray.init() 不指定 num_gpus，依赖自动检测。
-# SLURM 环境下 Ray 可能检测不到 GPU，导致 worker 分配不到 GPU 资源。
-# 解决：预先启动 Ray head 并显式声明 GPU 数量，verl 连接到此集群。
-ray start --head --num-gpus=3 --num-cpus="${SLURM_CPUS_PER_TASK:-16}" --port=6379
-sleep 5
-export RAY_ADDRESS=auto
-ray status
 
 # ===== Step 1: 应用 verl 补丁 =====
 echo "=== Applying verl patches ==="

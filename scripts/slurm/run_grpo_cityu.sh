@@ -52,12 +52,14 @@ unset PYTORCH_CUDA_ALLOC_CONF
 # 清除 ROCm 变量（SLURM 可能自动设置，与 CUDA_VISIBLE_DEVICES 冲突）
 unset ROCR_VISIBLE_DEVICES
 
-# 确保 CUDA 设备可见（SLURM 可能未正确传递到 Ray worker）
+# 确保 CUDA 设备可见
 if [ -z "${CUDA_VISIBLE_DEVICES:-}" ]; then
     export CUDA_VISIBLE_DEVICES=0,1,2
 fi
-echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 export WANDB_MODE=disabled
+
+# 【核心修复】禁止 Ray 覆盖 CUDA_VISIBLE_DEVICES（同 1node 脚本注释）
+export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1
 
 # NCCL 修复：PCIe A100 之间 P2P 不可用，禁用后走 SHM
 export NCCL_P2P_DISABLE=1
