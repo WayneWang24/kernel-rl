@@ -558,71 +558,84 @@ def patch_verl_force_cuda():
     Ray 会给它设 CUDA_VISIBLE_DEVICES=""，导致 torch.cuda.is_available()=False。
     这会级联到所有 worker 都不请求 GPU 资源。
 
-    修复：用 nvidia-smi fallback 替换 torch.cuda.is_available() 检测。
-    nvidia-smi 是系统调用，不受 CUDA_VISIBLE_DEVICES 环境变量影响。
+    修复：用 /dev/nvidia0 + SLURM 环境变量 fallback 替换 torch.cuda 检测。
+    /dev/nvidia0 不受 CUDA_VISIBLE_DEVICES 影响，且检测速度极快。
+    注意：nvidia-smi 在 CityU HPC 上超时 >10s，不可用作 fallback。
     """
     MARKER = "# [kernel-rl-force-cuda]"
+    TARGET_LINE = "is_cuda_available = torch.cuda.is_available()"
     fpath = _find_module_file("verl.utils.device")
     with open(fpath, "r") as f:
-        content = f.read()
+        lines = f.readlines()
 
-    # 清除旧版补丁（如果有的话）
-    if MARKER in content:
-        # 读取原始 verl 包重新安装的内容
-        old_line = "is_cuda_available = torch.cuda.is_available()"
-        if old_line not in content:
-            # 旧补丁已存在，需要替换
-            import re
-            # 移除从 MARKER 到 is_cuda_available = _robust_cuda_check() 的块
-            content = re.sub(
-                r'# \[kernel-rl-force-cuda\].*?is_cuda_available = _robust_cuda_check\(\)',
-                old_line,
-                content,
-                flags=re.DOTALL
-            )
-            print("[patch_force_cuda] Removed old patch, re-applying")
-        else:
-            print("[patch_force_cuda] Already has target line, re-applying")
+    # 清除旧版补丁（逐行过滤，比 regex 更可靠）
+    if any(MARKER in l for l in lines):
+        clean_lines = []
+        in_patch_block = False
+        for line in lines:
+            if MARKER in line:
+                # 标记进入补丁块（如果还没进入）
+                if not in_patch_block:
+                    in_patch_block = True
+                    # 在补丁块开头插入原始行
+                    clean_lines.append(TARGET_LINE + "\n")
+                continue  # 跳过所有带 MARKER 的行
+            if in_patch_block:
+                # 补丁块内的行：检查是否已到达补丁块结尾
+                stripped = line.strip()
+                if stripped == "" or stripped.startswith("#"):
+                    continue  # 跳过补丁块内的空行和注释
+                if "def _robust_cuda_check" in line:
+                    continue
+                if "is_cuda_available = _robust_cuda_check()" in line:
+                    in_patch_block = False
+                    continue  # 跳过最后一行，已在开头插入了原始行
+                # 属于 _robust_cuda_check 函数体的行（缩进的）
+                if line.startswith("    ") or line.startswith("\t"):
+                    continue
+                if "import os as _os_device" in line:
+                    continue
+                # 遇到非补丁的顶层代码，补丁块结束
+                in_patch_block = False
+                clean_lines.append(line)
+            else:
+                clean_lines.append(line)
+        lines = clean_lines
+        print("[patch_force_cuda] Cleaned old patch")
 
-    old_line = "is_cuda_available = torch.cuda.is_available()"
-    if old_line not in content:
-        print("[patch_force_cuda] WARNING: target line not found, skipping")
+    content = "".join(lines)
+    if TARGET_LINE not in content:
+        print(f"[patch_force_cuda] WARNING: '{TARGET_LINE}' not found in {fpath}, skipping")
         return
 
     new_block = f"""{MARKER}
-import os as _os_device
-def _robust_cuda_check():
-    \"\"\"Robust CUDA check for Ray actor / SLURM environments.\"\"\"
-    _cvd = _os_device.environ.get('CUDA_VISIBLE_DEVICES', None)
-    _standard = torch.cuda.is_available()
-    if _standard:
-        print(f"[force_cuda] torch.cuda OK (CVD={{_cvd}})")
-        return True
-    # Fallback 1: /dev/nvidia0 exists (not affected by CUDA_VISIBLE_DEVICES)
-    if _os_device.path.exists('/dev/nvidia0'):
-        print(f"[force_cuda] /dev/nvidia0 exists, forcing CUDA (CVD={{_cvd}})")
-        return True
-    # Fallback 2: SLURM allocated GPUs (we know we're on a GPU node)
-    _slurm_gpus = _os_device.environ.get('SLURM_GPUS_PER_NODE', '')
-    if _slurm_gpus:
-        print(f"[force_cuda] SLURM_GPUS_PER_NODE={{_slurm_gpus}}, forcing CUDA (CVD={{_cvd}})")
-        return True
-    # Fallback 3: nvidia-smi (try multiple paths)
-    import subprocess as _sp
-    for _nvsmi in ['nvidia-smi', '/usr/bin/nvidia-smi', '/usr/local/cuda/bin/nvidia-smi']:
-        try:
-            _r = _sp.run([_nvsmi], capture_output=True, timeout=10)
-            if _r.returncode == 0:
-                print(f"[force_cuda] {{_nvsmi}} OK, forcing CUDA (CVD={{_cvd}})")
-                return True
-        except Exception:
-            continue
-    print(f"[force_cuda] All checks failed, no CUDA (CVD={{_cvd}})")
-    return False
+import os as _os_device  {MARKER}
+def _robust_cuda_check():  {MARKER}
+    _cvd = _os_device.environ.get('CUDA_VISIBLE_DEVICES', None)  {MARKER}
+    if torch.cuda.is_available():  {MARKER}
+        return True  {MARKER}
+    # Fallback 1: /dev/nvidia0 (instant, unaffected by CUDA_VISIBLE_DEVICES)  {MARKER}
+    if _os_device.path.exists('/dev/nvidia0'):  {MARKER}
+        print(f"[force_cuda] /dev/nvidia0 exists, forcing CUDA (CVD={{_cvd}})")  {MARKER}
+        return True  {MARKER}
+    # Fallback 2: SLURM env vars (any of these means we're on a GPU node)  {MARKER}
+    for _var in ['SLURM_STEP_GPUS', 'SLURM_JOB_GPUS', 'SLURM_GPUS_PER_NODE']:  {MARKER}
+        _val = _os_device.environ.get(_var, '')  {MARKER}
+        if _val:  {MARKER}
+            print(f"[force_cuda] {{_var}}={{_val}}, forcing CUDA (CVD={{_cvd}})")  {MARKER}
+            return True  {MARKER}
+    # Fallback 3: any /dev/nvidia* device file  {MARKER}
+    try:  {MARKER}
+        if any(f.startswith('nvidia') for f in _os_device.listdir('/dev/')):  {MARKER}
+            print(f"[force_cuda] /dev/nvidia* found, forcing CUDA (CVD={{_cvd}})")  {MARKER}
+            return True  {MARKER}
+    except OSError:  {MARKER}
+        pass  {MARKER}
+    print(f"[force_cuda] All checks failed, no CUDA (CVD={{_cvd}})")  {MARKER}
+    return False  {MARKER}
+is_cuda_available = _robust_cuda_check()  {MARKER}"""
 
-is_cuda_available = _robust_cuda_check()"""
-
-    content = content.replace(old_line, new_block)
+    content = content.replace(TARGET_LINE, new_block)
     with open(fpath, "w") as f:
         f.write(content)
     print(f"[patch_force_cuda] Patched {fpath}")
