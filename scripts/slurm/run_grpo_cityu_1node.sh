@@ -64,8 +64,21 @@ export NCCL_DEBUG=WARN
 
 # ===== Step 0: 清理残留 Ray 集群 =====
 ray stop --force 2>/dev/null || true
-# 防止连接旧集群
-unset RAY_ADDRESS
+
+# ===== Step 0.5: GPU 诊断 =====
+echo "=== GPU Diagnostics ==="
+nvidia-smi || echo "WARNING: nvidia-smi not found or failed"
+python3 -c "import torch; print(f'torch.cuda.is_available()={torch.cuda.is_available()}, device_count={torch.cuda.device_count()}')"
+echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
+
+# ===== Step 0.6: 手动启动 Ray 并显式注册 GPU =====
+# verl 的 ray.init() 不指定 num_gpus，依赖自动检测。
+# SLURM 环境下 Ray 可能检测不到 GPU，导致 worker 分配不到 GPU 资源。
+# 解决：预先启动 Ray head 并显式声明 GPU 数量，verl 连接到此集群。
+ray start --head --num-gpus=3 --num-cpus="${SLURM_CPUS_PER_TASK:-16}" --port=6379
+sleep 5
+export RAY_ADDRESS=auto
+ray status
 
 # ===== Step 1: 应用 verl 补丁 =====
 echo "=== Applying verl patches ==="
@@ -179,3 +192,4 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     2>&1 | tee "${PROJECT_DIR}/logs/grpo_cityu_1node_${SLURM_JOB_ID}.log"
 
 echo "=== GRPO Training Complete ==="
+ray stop --force 2>/dev/null || true
