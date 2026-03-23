@@ -611,27 +611,34 @@ def patch_verl_force_cuda():
     new_block = f"""{MARKER}
 import os as _os_device  {MARKER}
 def _robust_cuda_check():  {MARKER}
+    _pid = _os_device.getpid()  {MARKER}
     _cvd = _os_device.environ.get('CUDA_VISIBLE_DEVICES', None)  {MARKER}
-    if torch.cuda.is_available():  {MARKER}
+    _rank = _os_device.environ.get('RANK', '<unset>')  {MARKER}
+    _ws = _os_device.environ.get('WORLD_SIZE', '<unset>')  {MARKER}
+    _tag = f"pid={{_pid}} RANK={{_rank}} WS={{_ws}} CVD={{_cvd}}"  {MARKER}
+    _std = torch.cuda.is_available()  {MARKER}
+    _cnt = torch.cuda.device_count() if _std else 0  {MARKER}
+    print(f"[force_cuda] {{_tag}} torch.cuda.avail={{_std}} count={{_cnt}}", flush=True)  {MARKER}
+    if _std:  {MARKER}
         return True  {MARKER}
     # Fallback 1: /dev/nvidia0 (instant, unaffected by CUDA_VISIBLE_DEVICES)  {MARKER}
     if _os_device.path.exists('/dev/nvidia0'):  {MARKER}
-        print(f"[force_cuda] /dev/nvidia0 exists, forcing CUDA (CVD={{_cvd}})")  {MARKER}
+        print(f"[force_cuda] {{_tag}} /dev/nvidia0 exists → forcing CUDA=True", flush=True)  {MARKER}
         return True  {MARKER}
     # Fallback 2: SLURM env vars (any of these means we're on a GPU node)  {MARKER}
     for _var in ['SLURM_STEP_GPUS', 'SLURM_JOB_GPUS', 'SLURM_GPUS_PER_NODE']:  {MARKER}
         _val = _os_device.environ.get(_var, '')  {MARKER}
         if _val:  {MARKER}
-            print(f"[force_cuda] {{_var}}={{_val}}, forcing CUDA (CVD={{_cvd}})")  {MARKER}
+            print(f"[force_cuda] {{_tag}} {{_var}}={{_val}} → forcing CUDA=True", flush=True)  {MARKER}
             return True  {MARKER}
     # Fallback 3: any /dev/nvidia* device file  {MARKER}
     try:  {MARKER}
         if any(f.startswith('nvidia') for f in _os_device.listdir('/dev/')):  {MARKER}
-            print(f"[force_cuda] /dev/nvidia* found, forcing CUDA (CVD={{_cvd}})")  {MARKER}
+            print(f"[force_cuda] {{_tag}} /dev/nvidia* found → forcing CUDA=True", flush=True)  {MARKER}
             return True  {MARKER}
     except OSError:  {MARKER}
         pass  {MARKER}
-    print(f"[force_cuda] All checks failed, no CUDA (CVD={{_cvd}})")  {MARKER}
+    print(f"[force_cuda] {{_tag}} All checks failed → CUDA=False", flush=True)  {MARKER}
     return False  {MARKER}
 is_cuda_available = _robust_cuda_check()  {MARKER}"""
 
@@ -713,6 +720,56 @@ def patch_verl_fsdp_clip_grad():
 
 
 # ============================================================
+# Step 0i: fsdp_workers.py 诊断补丁
+#
+# 在 init_process_group 前打印 CUDA 诊断信息，
+# 帮助调试 "ProcessGroupNCCL no GPUs found" 问题。
+# ============================================================
+FSDP_DIAG_MARKER = "# [kernel-rl-fsdp-cuda-diag]"
+
+
+def patch_verl_fsdp_cuda_diag():
+    """在 fsdp_workers.py 的 init_process_group 前加 CUDA 诊断日志。"""
+    fpath = _find_module_file("verl.workers.fsdp_workers")
+    with open(fpath) as f:
+        content = f.read()
+
+    if FSDP_DIAG_MARKER in content:
+        print("[patch] fsdp_workers CUDA diag already applied")
+        return
+
+    # 找到 init_process_group 调用
+    target = "torch.distributed.init_process_group("
+    if target not in content:
+        print("[patch] fsdp_workers: init_process_group not found, skipping diag")
+        return
+
+    lines = content.split("\n")
+    new_lines = []
+    patched = False
+    for line in lines:
+        if not patched and target in line:
+            indent = len(line) - len(line.lstrip())
+            s = " " * indent
+            # 在 init_process_group 前插入诊断
+            new_lines.append(f"{s}# CUDA diagnostics before init_process_group  {FSDP_DIAG_MARKER}")
+            new_lines.append(f"{s}import os as _diag_os  {FSDP_DIAG_MARKER}")
+            new_lines.append(f'{s}_diag_cvd = _diag_os.environ.get("CUDA_VISIBLE_DEVICES", "<unset>")  {FSDP_DIAG_MARKER}')
+            new_lines.append(f'{s}_diag_avail = torch.cuda.is_available()  {FSDP_DIAG_MARKER}')
+            new_lines.append(f'{s}_diag_count = torch.cuda.device_count() if _diag_avail else 0  {FSDP_DIAG_MARKER}')
+            new_lines.append(f'{s}_diag_rank = _diag_os.environ.get("RANK", "<unset>")  {FSDP_DIAG_MARKER}')
+            new_lines.append(f'{s}_diag_ws = _diag_os.environ.get("WORLD_SIZE", "<unset>")  {FSDP_DIAG_MARKER}')
+            new_lines.append(f'{s}print(f"[fsdp_diag] pid={{_diag_os.getpid()}} RANK={{_diag_rank}} WS={{_diag_ws}} CVD={{_diag_cvd}} cuda.avail={{_diag_avail}} cuda.count={{_diag_count}}", flush=True)  {FSDP_DIAG_MARKER}')
+            patched = True
+        new_lines.append(line)
+
+    if patched:
+        with open(fpath, "w") as f:
+            f.write("\n".join(new_lines))
+        print(f"[patch] Added CUDA diagnostics to fsdp_workers.py ({fpath})")
+
+
+# ============================================================
 # 公共辅助：应用所有补丁
 # ============================================================
 def apply_all_patches(project_dir=PROJECT_DIR, optim_tolerant=False):
@@ -722,6 +779,7 @@ def apply_all_patches(project_dir=PROJECT_DIR, optim_tolerant=False):
         optim_tolerant: 是否打 optimizer 容错补丁（仅在从损坏 checkpoint 恢复时需要）
     """
     patch_verl_force_cuda()
+    patch_verl_fsdp_cuda_diag()
     patch_verl_fsdp_clip_grad()
     patch_verl_dtensor_compat()
     patch_verl_async_import()
