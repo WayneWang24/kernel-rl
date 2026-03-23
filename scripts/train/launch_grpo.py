@@ -551,6 +551,55 @@ def patch_verl_rocr_fix():
 # _clip_grads_with_norm_ 和 _get_total_norm。
 # PyTorch 2.4 没有这两个函数，需要用兼容实现替换整个函数。
 # ============================================================
+def patch_verl_force_cuda():
+    """补丁 device.py：让 is_cuda_available 在 Ray actor 内也能正确检测 CUDA。
+
+    根因：verl 的 TaskRunner 是一个不请求 GPU 的 Ray actor，
+    Ray 会给它设 CUDA_VISIBLE_DEVICES=""，导致 torch.cuda.is_available()=False。
+    这会级联到所有 worker 都不请求 GPU 资源。
+
+    修复：用 nvidia-smi fallback 替换 torch.cuda.is_available() 检测。
+    nvidia-smi 是系统调用，不受 CUDA_VISIBLE_DEVICES 环境变量影响。
+    """
+    MARKER = "# [kernel-rl-force-cuda]"
+    fpath = _find_module_file("verl.utils.device")
+    with open(fpath, "r") as f:
+        content = f.read()
+
+    if MARKER in content:
+        print("[patch_force_cuda] Already patched")
+        return
+
+    old_line = "is_cuda_available = torch.cuda.is_available()"
+    if old_line not in content:
+        print("[patch_force_cuda] WARNING: target line not found, skipping")
+        return
+
+    new_block = f"""{MARKER}
+def _robust_cuda_check():
+    \"\"\"Robust CUDA check: fallback to nvidia-smi for Ray actor environments.\"\"\"
+    if torch.cuda.is_available():
+        return True
+    # In Ray actors without GPU resources, CUDA_VISIBLE_DEVICES="" makes
+    # torch.cuda.is_available() return False. But nvidia-smi still works
+    # because it's a system call not affected by the env var.
+    import subprocess as _sp
+    try:
+        _r = _sp.run(['nvidia-smi'], capture_output=True, timeout=10)
+        if _r.returncode == 0:
+            return True
+    except Exception:
+        pass
+    return False
+
+is_cuda_available = _robust_cuda_check()"""
+
+    content = content.replace(old_line, new_block)
+    with open(fpath, "w") as f:
+        f.write(content)
+    print(f"[patch_force_cuda] Patched {fpath}")
+
+
 def patch_verl_fsdp_clip_grad():
     """为 PyTorch 2.4 提供 fsdp2_clip_grad_norm_ 兼容实现。"""
     # 先检查是否需要补丁
@@ -631,6 +680,7 @@ def apply_all_patches(project_dir=PROJECT_DIR, optim_tolerant=False):
     Args:
         optim_tolerant: 是否打 optimizer 容错补丁（仅在从损坏 checkpoint 恢复时需要）
     """
+    patch_verl_force_cuda()
     patch_verl_fsdp_clip_grad()
     patch_verl_dtensor_compat()
     patch_verl_async_import()

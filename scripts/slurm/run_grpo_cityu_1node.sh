@@ -50,19 +50,12 @@ unset PYTORCH_CUDA_ALLOC_CONF
 # 清除 ROCm 变量
 unset ROCR_VISIBLE_DEVICES
 
-# 确保 CUDA 设备可见
-if [ -z "${CUDA_VISIBLE_DEVICES:-}" ]; then
-    export CUDA_VISIBLE_DEVICES=0,1,2
-fi
+# GPU 管理由 Ray + verl 的 patch_verl_force_cuda 补丁处理。
+# 不设 CUDA_VISIBLE_DEVICES（让 SLURM cgroup 自然管理），不设
+# RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES（让 Ray 正常管理每个 worker 的 GPU）。
+# 补丁让 TaskRunner（无 GPU 的 Ray actor）通过 nvidia-smi 检测 CUDA，
+# 避免级联失败。
 export WANDB_MODE=disabled
-
-# 【核心修复】禁止 Ray 覆盖 CUDA_VISIBLE_DEVICES
-# 根因：verl 创建 TaskRunner actor 时不请求 GPU，Ray 给它设 CUDA_VISIBLE_DEVICES=""，
-# 导致 TaskRunner 内 torch.cuda.is_available()=False → get_device_name()="cpu"，
-# 级联导致所有 worker 也不请求 GPU 资源。
-# 设置此变量后，所有 Ray 进程继承父进程的 CUDA_VISIBLE_DEVICES=0,1,2，
-# verl 自己的 _setup_env_cuda_visible_devices() 负责每个 worker 的 GPU 分配。
-export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1
 
 # NCCL 修复：PCIe A100 之间 P2P 可能不可用，禁用后走 SHM
 export NCCL_P2P_DISABLE=1
