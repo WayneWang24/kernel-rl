@@ -566,9 +566,23 @@ def patch_verl_force_cuda():
     with open(fpath, "r") as f:
         content = f.read()
 
+    # 清除旧版补丁（如果有的话）
     if MARKER in content:
-        print("[patch_force_cuda] Already patched")
-        return
+        # 读取原始 verl 包重新安装的内容
+        old_line = "is_cuda_available = torch.cuda.is_available()"
+        if old_line not in content:
+            # 旧补丁已存在，需要替换
+            import re
+            # 移除从 MARKER 到 is_cuda_available = _robust_cuda_check() 的块
+            content = re.sub(
+                r'# \[kernel-rl-force-cuda\].*?is_cuda_available = _robust_cuda_check\(\)',
+                old_line,
+                content,
+                flags=re.DOTALL
+            )
+            print("[patch_force_cuda] Removed old patch, re-applying")
+        else:
+            print("[patch_force_cuda] Already has target line, re-applying")
 
     old_line = "is_cuda_available = torch.cuda.is_available()"
     if old_line not in content:
@@ -576,20 +590,34 @@ def patch_verl_force_cuda():
         return
 
     new_block = f"""{MARKER}
+import os as _os_device
 def _robust_cuda_check():
-    \"\"\"Robust CUDA check: fallback to nvidia-smi for Ray actor environments.\"\"\"
-    if torch.cuda.is_available():
+    \"\"\"Robust CUDA check for Ray actor / SLURM environments.\"\"\"
+    _cvd = _os_device.environ.get('CUDA_VISIBLE_DEVICES', None)
+    _standard = torch.cuda.is_available()
+    if _standard:
+        print(f"[force_cuda] torch.cuda OK (CVD={{_cvd}})")
         return True
-    # In Ray actors without GPU resources, CUDA_VISIBLE_DEVICES="" makes
-    # torch.cuda.is_available() return False. But nvidia-smi still works
-    # because it's a system call not affected by the env var.
+    # Fallback 1: /dev/nvidia0 exists (not affected by CUDA_VISIBLE_DEVICES)
+    if _os_device.path.exists('/dev/nvidia0'):
+        print(f"[force_cuda] /dev/nvidia0 exists, forcing CUDA (CVD={{_cvd}})")
+        return True
+    # Fallback 2: SLURM allocated GPUs (we know we're on a GPU node)
+    _slurm_gpus = _os_device.environ.get('SLURM_GPUS_PER_NODE', '')
+    if _slurm_gpus:
+        print(f"[force_cuda] SLURM_GPUS_PER_NODE={{_slurm_gpus}}, forcing CUDA (CVD={{_cvd}})")
+        return True
+    # Fallback 3: nvidia-smi (try multiple paths)
     import subprocess as _sp
-    try:
-        _r = _sp.run(['nvidia-smi'], capture_output=True, timeout=10)
-        if _r.returncode == 0:
-            return True
-    except Exception:
-        pass
+    for _nvsmi in ['nvidia-smi', '/usr/bin/nvidia-smi', '/usr/local/cuda/bin/nvidia-smi']:
+        try:
+            _r = _sp.run([_nvsmi], capture_output=True, timeout=10)
+            if _r.returncode == 0:
+                print(f"[force_cuda] {{_nvsmi}} OK, forcing CUDA (CVD={{_cvd}})")
+                return True
+        except Exception:
+            continue
+    print(f"[force_cuda] All checks failed, no CUDA (CVD={{_cvd}})")
     return False
 
 is_cuda_available = _robust_cuda_check()"""
