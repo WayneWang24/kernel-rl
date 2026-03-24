@@ -58,12 +58,13 @@ CUDA_VISIBLE_DEVICES=0 python -m vllm.entrypoints.openai.api_server \
     --gpu-memory-utilization 0.85 \
     --max-model-len 10240 \
     --dtype half \
+    --enforce-eager \
     --port 8000 &
 VLLM_PID=$!
 
-# 等待 vLLM 就绪
+# 等待 vLLM 就绪（enforce-eager 跳过 cudagraph，启动更快）
 echo "Waiting for vLLM server..."
-for i in $(seq 1 120); do
+for i in $(seq 1 300); do
     if curl -s http://localhost:8000/health > /dev/null 2>&1; then
         echo "vLLM ready! (${i}s)"
         break
@@ -71,7 +72,7 @@ for i in $(seq 1 120); do
     if ! kill -0 "$VLLM_PID" 2>/dev/null; then
         echo "ERROR: vLLM died"; exit 1
     fi
-    if [ "$i" -eq 120 ]; then
+    if [ "$i" -eq 300 ]; then
         echo "ERROR: vLLM timeout"; kill $VLLM_PID 2>/dev/null; exit 1
     fi
     sleep 1
