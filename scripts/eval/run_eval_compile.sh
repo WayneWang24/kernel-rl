@@ -76,13 +76,14 @@ else
     echo ""
     echo "=== Phase A: Generation (vLLM) ==="
 
-    # 启动 vLLM 服务
+    # 启动 vLLM 服务（TP=1 避免 CUDA fork 错误，7B 单卡可跑）
     echo "Starting vLLM server on port $VLLM_PORT..."
-    python -m vllm.entrypoints.openai.api_server \
+    CUDA_VISIBLE_DEVICES=0 python -m vllm.entrypoints.openai.api_server \
         --model "$MODEL_PATH" \
-        --tensor-parallel-size "$NUM_GPUS" \
-        --gpu-memory-utilization 0.8 \
+        --tensor-parallel-size 1 \
+        --gpu-memory-utilization 0.85 \
         --max-model-len 10240 \
+        --dtype half \
         --port "$VLLM_PORT" &
     VLLM_PID=$!
 
