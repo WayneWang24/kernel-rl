@@ -447,8 +447,30 @@ def patch_verl_skip_agent_loop():
         content = f.read()
 
     if AGENT_LOOP_PATCH_MARKER in content:
-        print("[patch] ray_trainer already patched to skip AgentLoopManager")
-        return
+        # 清理旧补丁（可能是坏的），还原后重新打补丁
+        print("[patch] Cleaning up old agent-loop patch...")
+        lines = content.split("\n")
+        cleaned = []
+        un_indent = False
+        for line in lines:
+            if AGENT_LOOP_PATCH_MARKER in line:
+                if "try:" in line:
+                    un_indent = True
+                elif "except" in line:
+                    un_indent = False
+                continue  # 跳过所有 marker 行
+            if un_indent:
+                # try: 和 except: 之间的行被加了 4 格缩进，还原
+                if line[:4] == "    ":
+                    cleaned.append(line[4:])
+                else:
+                    cleaned.append(line)
+            else:
+                cleaned.append(line)
+        content = "\n".join(cleaned)
+        with open(fpath, "w") as f:
+            f.write(content)
+        print("[patch] Old patch cleaned, re-applying...")
 
     target = "self.async_rollout_manager = AgentLoopManager("
     if target not in content:
