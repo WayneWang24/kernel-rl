@@ -436,7 +436,11 @@ AGENT_LOOP_PATCH_MARKER = "# [kernel-rl-agent-loop-skip]"
 
 
 def patch_verl_skip_agent_loop():
-    """让 ray_trainer.py 在 AgentLoopManager 初始化失败时跳过。"""
+    """让 ray_trainer.py 在 AgentLoopManager 初始化失败时跳过。
+
+    只包装 self.async_rollout_manager = AgentLoopManager(...) 调用，
+    不动 import 行（import 可能在不同作用域，移动会破坏缩进）。
+    """
     fpath = _find_module_file("verl.trainer.ppo.ray_trainer")
 
     with open(fpath) as f:
@@ -446,7 +450,6 @@ def patch_verl_skip_agent_loop():
         print("[patch] ray_trainer already patched to skip AgentLoopManager")
         return
 
-    # 找到 self.async_rollout_manager = AgentLoopManager( 这行
     target = "self.async_rollout_manager = AgentLoopManager("
     if target not in content:
         print("[patch] ray_trainer: AgentLoopManager init not found, skipping")
@@ -461,26 +464,13 @@ def patch_verl_skip_agent_loop():
         if not patched and target in line:
             indent = len(line) - len(line.lstrip())
             s = " " * indent
-            # 插入 try 在 AgentLoopManager import 之前
-            # 先找到 from verl.experimental.agent_loop import 那行（在前面几行）
-            # 从当前位置向前找 import 行
-            import_idx = None
-            for j in range(len(new_lines) - 1, max(len(new_lines) - 15, -1), -1):
-                if "from verl.experimental.agent_loop import" in new_lines[j]:
-                    import_idx = j
-                    break
 
-            if import_idx is not None:
-                # 在 import 行前插入 try
-                new_lines.insert(import_idx, f"{s}try:  {AGENT_LOOP_PATCH_MARKER}")
-                # import 行和后续行都需要额外缩进
-                for k in range(import_idx + 1, len(new_lines)):
-                    new_lines[k] = "    " + new_lines[k]
+            # 插入 try: 紧接在调用行前面（同级缩进）
+            new_lines.append(f"{s}try:  {AGENT_LOOP_PATCH_MARKER}")
 
-            # 当前行（AgentLoopManager 初始化）也需要缩进
+            # 调用行及续行加 4 格缩进
             new_lines.append("    " + line)
             i += 1
-            # 继续缩进直到 AgentLoopManager(...) 结束（找到匹配的右括号）
             paren_depth = line.count("(") - line.count(")")
             while i < len(lines) and paren_depth > 0:
                 line2 = lines[i]
@@ -488,10 +478,10 @@ def patch_verl_skip_agent_loop():
                 new_lines.append("    " + line2)
                 i += 1
 
-            # 插入 except
-            new_lines.append(f"{s}except (ImportError, TypeError, Exception) as _e:  {AGENT_LOOP_PATCH_MARKER}")
+            # except 块
+            new_lines.append(f"{s}except Exception as _e:  {AGENT_LOOP_PATCH_MARKER}")
             new_lines.append(f"{s}    import warnings  {AGENT_LOOP_PATCH_MARKER}")
-            new_lines.append(f'{s}    warnings.warn(f"AgentLoopManager unavailable, skipping async rollout: {{_e}}")  {AGENT_LOOP_PATCH_MARKER}')
+            new_lines.append(f'{s}    warnings.warn(f"AgentLoopManager unavailable: {{_e}}")  {AGENT_LOOP_PATCH_MARKER}')
             new_lines.append(f"{s}    self.async_rollout_manager = None  {AGENT_LOOP_PATCH_MARKER}")
             patched = True
         else:
