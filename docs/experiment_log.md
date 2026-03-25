@@ -22,6 +22,32 @@
 
 注意：此为静态分析评分，仅检查代码结构完整度（有 triton import、jit decorator、wrapper 等），不验证编译/运行正确性。
 
+### KernelBench 编译+运行评测结果 (2026-03-24)
+
+使用 my-kernel-bench 进行实际编译和运行验证（vLLM TP=1, enforce-eager）。
+
+| 指标 | Level 1 | Level 2 |
+|------|---------|---------|
+| 总题数 | 100 | 100 |
+| Python 编译通过 | 86 (86%) | 81 (81%) |
+| **运行验证通过** | **0 (0%)** | **19 (23.5%)** |
+
+**验证失败原因分布（编译通过但验证失败的样本）：**
+
+| 错误类型 | Level 1 (86个) | Level 2 (62个) | 说明 |
+|---------|---------------|---------------|------|
+| RuntimeError | 32 (37%) | 26 (42%) | kernel 执行崩溃（内存越界、参数错误） |
+| Shape 不匹配 | 16 (19%) | 10 (16%) | 输出 tensor 形状不对 |
+| TritonCompileError | 15 (17%) | 9 (15%) | Triton JIT 编译失败（kernel 逻辑有误） |
+| TypeError | 4 (5%) | 4 (6%) | 类型错误 |
+| Other | 19 (22%) | 13 (21%) | 其他错误 |
+
+**关键发现：**
+- 静态分析评分 0.96 / 0.92，但实际运行验证通过率仅 0% / 23.5%
+- SFT 模型学会了代码结构（86% Python 编译通过），但 Triton kernel 内部逻辑质量不足
+- Level 1（简单操作如 matmul、relu）反而 0% 通过，Level 2 有 23.5%，原因待分析
+- **验证了 compile+run reward 的必要性** — 静态分析无法区分"结构正确"和"逻辑正确"
+
 ---
 
 ## Exp-2: GRPO 3B 方法验证 (PolyU HPC)
@@ -106,7 +132,9 @@
 3. **GRPO 3B**: grpo_3b best checkpoint (Exp-2)
 4. **GRPO 7B**: grpo_cuda best checkpoint (Exp-3)
 
-指标：静态分析 avg_score + has_complete_pct (≥0.8)
+指标：
+- 静态分析：avg_score + has_complete_pct (≥0.8)
+- 编译+运行：compile_pass_rate + verify_pass_rate（通过 my-kernel-bench 实际编译运行验证）
 
 ## Google Drive 备份
 
