@@ -213,6 +213,7 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     trainer.nnodes=1 \
     trainer.save_freq=200 \
     trainer.test_freq=200 \
+    trainer.val_before_train=false \
     trainer.max_actor_ckpt_to_keep=1 \
     trainer.total_epochs=3 \
     2>&1 | tee "${PROJECT_DIR}/logs/grpo_cityu_1node_${SLURM_JOB_ID}.log"

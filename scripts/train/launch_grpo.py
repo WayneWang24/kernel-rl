@@ -527,6 +527,35 @@ def patch_verl_skip_agent_loop():
         print("[patch] WARNING: could not patch AgentLoopManager in ray_trainer.py")
 
 
+def clean_agent_loop_patch():
+    """恢复被 patch_verl_skip_agent_loop 修改的 ray_trainer.py。"""
+    fpath = _find_module_file("verl.trainer.ppo.ray_trainer")
+    with open(fpath) as f:
+        content = f.read()
+    if AGENT_LOOP_PATCH_MARKER not in content:
+        return
+    lines = content.split("\n")
+    cleaned = []
+    un_indent = False
+    for line in lines:
+        if AGENT_LOOP_PATCH_MARKER in line:
+            if "try:" in line:
+                un_indent = True
+            elif "except" in line:
+                un_indent = False
+            continue
+        if un_indent:
+            if line[:4] == "    ":
+                cleaned.append(line[4:])
+            else:
+                cleaned.append(line)
+        else:
+            cleaned.append(line)
+    with open(fpath, "w") as f:
+        f.write("\n".join(cleaned))
+    print(f"[patch] Cleaned agent-loop-skip patch from ray_trainer.py ({fpath})")
+
+
 # ============================================================
 # Step 0h: 补丁 worker.py 的 ROCR_VISIBLE_DEVICES 检查
 #
@@ -982,7 +1011,8 @@ def apply_all_patches(project_dir=PROJECT_DIR, optim_tolerant=False):
     patch_verl_fsdp_clip_grad()
     patch_verl_dtensor_compat()
     patch_verl_async_import()
-    patch_verl_skip_agent_loop()
+    # patch_verl_skip_agent_loop()  # 禁用：此补丁会把 AgentLoopManager 初始化失败静默吞掉，导致 async_rollout_manager=None
+    clean_agent_loop_patch()  # 恢复被旧补丁修改的 ray_trainer.py
     patch_verl_rocr_fix()
     ensure_clean_verl_reward()
     patch_verl_reward()
