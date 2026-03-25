@@ -328,87 +328,44 @@ DTENSOR_PATCH_MARKER = "# [kernel-rl-dtensor-compat]"
 
 
 def patch_verl_dtensor_compat():
-    """修复 verl 中所有 DTensor import 以兼容 PyTorch 2.4。"""
-    # 检查是否需要补丁（PyTorch 2.5+ 不需要）
+    """在 PyTorch 2.4 中创建 torch.distributed.tensor shim 包。
+
+    PyTorch 2.5+ 把 torch.distributed._tensor 移到了 torch.distributed.tensor。
+    verl 0.7.0+ 使用新路径，在 PyTorch 2.4 上会 ImportError。
+    不再逐文件 patch，而是创建一个 shim 包让所有 import 都能工作。
+    """
     try:
         from torch.distributed.tensor import DTensor  # noqa: F401
-        print("[patch] DTensor import OK, no compat patch needed")
+        print("[patch] torch.distributed.tensor already available, no shim needed")
         return
     except ImportError:
         pass
 
-    import importlib.util
-    verl_spec = importlib.util.find_spec("verl")
-    if verl_spec is None or verl_spec.origin is None:
-        return
-    verl_root = os.path.dirname(verl_spec.origin)
+    import torch.distributed
+    dist_dir = os.path.dirname(torch.distributed.__file__)
+    tensor_pkg = os.path.join(dist_dir, "tensor")
 
-    old_import = "from torch.distributed.tensor import DTensor"
+    # 如果已有 tensor.py 文件（不太可能），先备份
+    tensor_file = tensor_pkg + ".py"
+    if os.path.isfile(tensor_file) and not os.path.isdir(tensor_pkg):
+        os.rename(tensor_file, tensor_file + ".bak")
 
-    patched_files = 0
-    for root, dirs, files in os.walk(verl_root):
-        for fname in files:
-            if not fname.endswith(".py"):
-                continue
-            fpath = os.path.join(root, fname)
-            with open(fpath) as f:
-                content = f.read()
+    os.makedirs(tensor_pkg, exist_ok=True)
 
-            if old_import not in content and DTENSOR_PATCH_MARKER not in content:
-                continue  # 文件无关
-
-            lines = content.splitlines(keepends=True)
-
-            # 清理旧补丁 marker 行，但记住每个 marker 块的位置和缩进
-            clean_lines = []
-            marker_blocks = []  # [(insert_pos, indent)]
-            for line in lines:
-                if DTENSOR_PATCH_MARKER in line:
-                    if not marker_blocks or marker_blocks[-1][0] != len(clean_lines):
-                        indent = line[: len(line) - len(line.lstrip())]
-                        marker_blocks.append((len(clean_lines), indent))
-                else:
-                    clean_lines.append(line)
-
-            # 情况 A: 文件有旧 marker（之前 patch 过，可能坏了）
-            # 在每个 marker 块的位置插入正确的 try/except
-            if marker_blocks:
-                for pos, indent in reversed(marker_blocks):
-                    patch = [
-                        f"{indent}try:  {DTENSOR_PATCH_MARKER}\n",
-                        f"{indent}    {old_import}  {DTENSOR_PATCH_MARKER}\n",
-                        f"{indent}except ImportError:  {DTENSOR_PATCH_MARKER}\n",
-                        f"{indent}    from torch.distributed._tensor import DTensor  {DTENSOR_PATCH_MARKER}\n",
-                    ]
-                    clean_lines[pos:pos] = patch
-                with open(fpath, "w") as f:
-                    f.writelines(clean_lines)
-                patched_files += 1
-                continue
-
-            # 情况 B: 新文件，找到 import 行并包裹 try/except
-            new_lines = []
-            found = False
-            for line in clean_lines:
-                if old_import in line and not line.lstrip().startswith("#"):
-                    indent = line[: len(line) - len(line.lstrip())]
-                    new_lines.append(f"{indent}try:  {DTENSOR_PATCH_MARKER}\n")
-                    new_lines.append(f"{indent}    {old_import}  {DTENSOR_PATCH_MARKER}\n")
-                    new_lines.append(f"{indent}except ImportError:  {DTENSOR_PATCH_MARKER}\n")
-                    new_lines.append(f"{indent}    from torch.distributed._tensor import DTensor  {DTENSOR_PATCH_MARKER}\n")
-                    found = True
-                else:
-                    new_lines.append(line)
-
-            if found:
-                with open(fpath, "w") as f:
-                    f.writelines(new_lines)
-                patched_files += 1
-
-    if patched_files:
-        print(f"[patch] Fixed DTensor import in {patched_files} verl files (PyTorch 2.4 compat)")
-    else:
-        print("[patch] No DTensor import fixes needed")
+    shim_init = '''\
+"""Shim: redirect torch.distributed.tensor -> torch.distributed._tensor (PyTorch 2.4 compat)"""
+from torch.distributed._tensor import *  # noqa: F401,F403
+from torch.distributed._tensor import DTensor  # noqa: F401
+# Re-export submodules
+try:
+    from torch.distributed._tensor.placement_types import *  # noqa: F401,F403
+except ImportError:
+    pass
+'''
+    shim_path = os.path.join(tensor_pkg, "__init__.py")
+    with open(shim_path, "w") as f:
+        f.write(shim_init)
+    print(f"[patch] Created torch.distributed.tensor shim at {tensor_pkg}/")
 
 
 # ============================================================
