@@ -1000,33 +1000,35 @@ def patch_sglang_videoinput_compat():
 def apply_all_patches(project_dir=PROJECT_DIR, optim_tolerant=False):
     """应用所有 verl 补丁。可被 SLURM 脚本直接调用。
 
+    verl 版本兼容性：
+    - verl 0.4.1: 老 rollout 架构（sync mode），大部分补丁目标不存在，只需 reward 补丁
+    - verl 0.7.0: 新 AgentLoopManager 架构，需要 vLLM 0.8.5+ / PyTorch 2.6+
+
     Args:
         optim_tolerant: 是否打 optimizer 容错补丁（仅在从损坏 checkpoint 恢复时需要）
     """
-    import torch
-    torch_major, torch_minor = int(torch.__version__.split(".")[0]), int(torch.__version__.split(".")[1])
-    needs_legacy_patches = torch_minor < 6  # PyTorch < 2.6 需要额外兼容补丁
+    import verl
+    verl_version = getattr(verl, "__version__", "unknown")
+    print(f"[patches] verl version: {verl_version}")
 
-    if needs_legacy_patches:
-        print(f"[patches] PyTorch {torch.__version__} < 2.6, applying legacy compat patches")
-        patch_sglang_videoinput_compat()
-        patch_sglang_outlines_compat()
-        patch_sglang_deepgemm_compat()
-        patch_verl_dtensor_compat()
-        patch_verl_async_import()
-    else:
-        print(f"[patches] PyTorch {torch.__version__} >= 2.6, skipping legacy compat patches")
+    # 每个补丁都有 "not found, skipping" 的安全检查，所以可以安全尝试
+    # 但为了减少无用日志，按 verl 版本分组
 
-    # 通用补丁（所有 PyTorch 版本都需要）
+    # 通用补丁：reward 函数替换（所有版本都需要）
+    ensure_clean_verl_reward()
+    patch_verl_reward()
+
+    # verl 0.4.x: 老架构，大部分补丁目标不存在
+    # verl 0.7.x: 新架构，需要更多补丁
+    # 每个补丁内部会检查目标是否存在，安全调用
     patch_verl_force_cuda()
     patch_verl_fsdp_cuda_diag()
     patch_verl_fsdp_clip_grad()
-    clean_agent_loop_patch()  # 恢复被旧补丁修改的 ray_trainer.py
+    clean_agent_loop_patch()
     patch_verl_rocr_fix()
-    ensure_clean_verl_reward()
-    patch_verl_reward()
     clean_verl_empty_cache()
     patch_verl_empty_cache()
+
     if optim_tolerant:
         clean_verl_optim_patch()
         patch_verl_optim_tolerant()

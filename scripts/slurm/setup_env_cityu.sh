@@ -8,6 +8,11 @@
 # 前提：
 #   - 已 clone 代码: git clone https://github.com/WayneWang24/kernel-rl.git
 #   - 有 conda/mamba
+#
+# 兼容性：
+#   CUDA Driver 535 → max CUDA 12.2 → cu121 wheels only
+#   PyTorch 2.4.0+cu121 + vLLM 0.6.3 + verl 0.4.1
+#   verl 0.4.1 使用老 rollout 架构（不需要 vLLM 0.8+）
 # ============================================================
 
 set -euxo pipefail
@@ -27,21 +32,21 @@ eval "$(conda shell.bash hook)"
 conda activate kernel-rl
 
 # 2. 安装核心依赖
-# verl 0.7.0 要求 vLLM >= 0.8.5，vLLM 0.8.5 要求 PyTorch 2.6
-pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu121
-pip install vllm==0.8.5
-pip install verl==0.7.0
+# CUDA Driver 535 只支持到 CUDA 12.2，必须用 cu121 wheels
+# verl 0.4.1: 有 GRPO + LoRA，用老 rollout（不需要 AgentLoopManager/vLLM 0.8+）
+pip install torch==2.4.0 --index-url https://download.pytorch.org/whl/cu121
+pip install vllm==0.6.3.post1
+pip install verl==0.4.1 --no-deps
 pip install flash-attn --no-build-isolation
-pip install pandas pyarrow
+pip install pandas pyarrow ray tensordict
 
 # 2b. 安装 nvcc（HPC 计算节点无系统 nvcc，load_inline 编译需要）
 conda install -c nvidia cuda-nvcc=12.1 cuda-cudart-dev=12.1 -y
 
 # 3. 验证安装
 python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA available: {torch.cuda.is_available()}')"
-python -c "import vllm; print(f'vLLM {vllm.__version__}')"
-python -c "import verl; print(f'verl installed at {verl.__file__}')"
-python -c "from torch.distributed.tensor import DTensor; print('DTensor native OK')"
+python -c "import vllm; print(f'vLLM {vllm.__version__}')" 2>/dev/null || echo "vLLM import warning on login node (OK)"
+python -c "import verl; print(f'verl {verl.__version__}')"
 nvcc --version || echo "nvcc not available on login node (OK, available on compute nodes)"
 
 # 4. 准备数据（从 cleaned parquet 生成 RL 数据）
