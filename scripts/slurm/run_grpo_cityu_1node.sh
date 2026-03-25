@@ -84,7 +84,7 @@ for i in range(total):
         [sys.executable, '-c',
          f'import os; os.environ[\"CUDA_VISIBLE_DEVICES\"]=\"{i}\"; import torch; '
          f'assert torch.cuda.is_available() and torch.cuda.device_count()>0, '
-         f'f\"GPU {i}: avail={torch.cuda.is_available()} count={torch.cuda.device_count()}\"'],
+         f'f\"GPU {i}: avail={{torch.cuda.is_available()}} count={{torch.cuda.device_count()}}\"'],
         capture_output=True, timeout=30, text=True)
     if r.returncode == 0:
         working.append(str(i))
