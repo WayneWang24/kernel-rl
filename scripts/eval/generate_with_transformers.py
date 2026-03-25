@@ -89,7 +89,7 @@ def main():
         level = task["level"]
         print(f"[{i + 1}/{len(tasks)}] Level {level} / {task_id}...", end=" ", flush=True)
 
-        prompt = CUDA_PROMPT_TEMPLATE.format(model_code=task["model_code"].strip())
+        prompt = CUDA_PROMPT_TEMPLATE.replace("{model_code}", task["model_code"].strip())
         messages = [{"role": "user", "content": prompt}]
         text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         inputs = tokenizer(text, return_tensors="pt").to(model.device)
