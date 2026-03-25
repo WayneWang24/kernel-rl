@@ -39,7 +39,7 @@ PROJECT_DIR="${HOME}/ChenweiWang/workspace/kernel-rl"
 mkdir -p "${PROJECT_DIR}/logs"
 
 # ===== 环境变量 =====
-# SGLang 使用 flashinfer，无需 VLLM_ATTENTION_BACKEND
+# vLLM rollout (SGLang ABI 不兼容 torch 2.4)
 export RAY_memory_monitor_refresh_ms=0
 export HYDRA_FULL_ERROR=1
 export PYTHONUNBUFFERED=1
@@ -257,15 +257,10 @@ PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     actor_rollout_ref.actor.fsdp_config.param_offload=false \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=false \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
-    actor_rollout_ref.rollout.name=sglang \
+    actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
-    actor_rollout_ref.rollout.free_cache_engine=true \
-    actor_rollout_ref.rollout.enforce_eager=false \
-    actor_rollout_ref.rollout.max_num_seqs=16 \
-    "+actor_rollout_ref.rollout.engine_kwargs.sglang.attention_backend=flashinfer" \
-    "+actor_rollout_ref.rollout.engine_kwargs.sglang.cuda_graph_max_bs=16" \
-    "+actor_rollout_ref.rollout.engine_kwargs.sglang.chunked_prefill_size=4096" \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
+    actor_rollout_ref.rollout.max_model_len=6144 \
     actor_rollout_ref.rollout.n=5 \
     algorithm.use_kl_in_reward=false \
     custom_reward_function.path="$REWARD_FN_PATH" \
@@ -273,7 +268,7 @@ PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     trainer.critic_warmup=0 \
     trainer.logger='["console"]' \
     trainer.project_name=kernel_rl \
-    trainer.experiment_name=grpo_cuda_sglang_${TOTAL_GPUS}gpu \
+    trainer.experiment_name=grpo_cuda_vllm_${TOTAL_GPUS}gpu \
     trainer.default_local_dir="${PROJECT_DIR}/checkpoints/grpo_cuda" \
     trainer.n_gpus_per_node=$GPUS_PER_NODE \
     trainer.nnodes=$SLURM_JOB_NUM_NODES \
