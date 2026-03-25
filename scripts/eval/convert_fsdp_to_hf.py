@@ -13,16 +13,19 @@ import torch
 from pathlib import Path
 
 
-def _detensor(state_dict: dict) -> dict:
+def _detensor(state_dict: dict) -> tuple:
     """Convert any DTensor values to regular torch.Tensor.
 
     Uses to_local() which works without distributed init.
     Falls back to full_tensor() then ._local_tensor if needed.
+
+    Returns (state_dict, had_dtensors) - had_dtensors indicates FSDP sharding
+    where to_local() returns only the local shard (needs concatenation).
     """
     try:
         from torch.distributed._tensor import DTensor
     except ImportError:
-        return state_dict
+        return state_dict, False
 
     out = {}
     n_converted = 0
@@ -34,14 +37,13 @@ def _detensor(state_dict: dict) -> dict:
                 try:
                     out[k] = v.full_tensor()
                 except Exception:
-                    # Last resort: access internal storage
                     out[k] = v._local_tensor
             n_converted += 1
         else:
             out[k] = v
     if n_converted:
         print(f"  Converted {n_converted}/{len(state_dict)} DTensor -> Tensor")
-    return out
+    return out, n_converted > 0
 
 
 def merge_fsdp_to_hf(ckpt_dir: str, output_dir: str):
@@ -59,18 +61,31 @@ def merge_fsdp_to_hf(ckpt_dir: str, output_dir: str):
 
     # Load all shards
     states = []
+    is_dtensor_ckpt = False
     for s in shards:
         size_gb = s.stat().st_size / 1e9
         print(f"Loading {s.name} ({size_gb:.2f} GB)...")
         state = torch.load(s, map_location="cpu", weights_only=False)
-        state = _detensor(state)
+        state, had_dt = _detensor(state)
+        if had_dt:
+            is_dtensor_ckpt = True
         states.append(state)
         print(f"  Keys: {len(state)}")
 
     # Determine format and merge
     keys_per_rank = [set(s.keys()) for s in states]
 
-    if all(k == keys_per_rank[0] for k in keys_per_rank):
+    if is_dtensor_ckpt and world_size > 1 and all(k == keys_per_rank[0] for k in keys_per_rank):
+        # DTensor checkpoint: to_local() returns local FSDP shard, must concatenate
+        print("Format: FSDP DTensor SHARDING (concatenating local shards)")
+        merged = {}
+        for key in states[0].keys():
+            tensors = [s[key] for s in states]
+            if tensors[0].dim() == 0:
+                merged[key] = tensors[0]  # scalar
+            else:
+                merged[key] = torch.cat(tensors, dim=0)
+    elif all(k == keys_per_rank[0] for k in keys_per_rank):
         # All ranks have the same keys
         sample_key = list(states[0].keys())[0]
         shapes = [s[sample_key].shape for s in states]
