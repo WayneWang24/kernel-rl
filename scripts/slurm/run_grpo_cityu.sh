@@ -283,7 +283,7 @@ PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.mode=sync \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.35 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.45 \
     actor_rollout_ref.rollout.enforce_eager=true \
     actor_rollout_ref.rollout.free_cache_engine=true \
     actor_rollout_ref.rollout.load_format=safetensors \
