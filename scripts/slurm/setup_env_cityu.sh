@@ -26,8 +26,10 @@ fi
 eval "$(conda shell.bash hook)"
 conda activate kernel-rl
 
-# 2. 安装依赖
-pip install torch==2.4.0 --index-url https://download.pytorch.org/whl/cu121
+# 2. 安装核心依赖
+# verl 0.7.0 要求 vLLM >= 0.8.5，vLLM 0.8.5 要求 PyTorch 2.6
+pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu121
+pip install vllm==0.8.5
 pip install verl==0.7.0
 pip install flash-attn --no-build-isolation
 pip install pandas pyarrow
@@ -35,16 +37,12 @@ pip install pandas pyarrow
 # 2b. 安装 nvcc（HPC 计算节点无系统 nvcc，load_inline 编译需要）
 conda install -c nvidia cuda-nvcc=12.1 cuda-cudart-dev=12.1 -y
 
-# 2c. 安装 SGLang（替代 vLLM，GRPO 多采样前缀共享更优）
-pip install "sglang[all]"
-pip install flashinfer -i https://flashinfer.ai/whl/cu121/torch2.4/
-
 # 3. 验证安装
-python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA {torch.cuda.is_available()}')"
+python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA available: {torch.cuda.is_available()}')"
+python -c "import vllm; print(f'vLLM {vllm.__version__}')"
 python -c "import verl; print(f'verl installed at {verl.__file__}')"
-python -c "import sglang; print(f'SGLang {sglang.__version__}')"
-nvcc --version
-python -c "from torch.utils.cpp_extension import load_inline; print('load_inline OK')"
+python -c "from torch.distributed.tensor import DTensor; print('DTensor native OK')"
+nvcc --version || echo "nvcc not available on login node (OK, available on compute nodes)"
 
 # 4. 准备数据（从 cleaned parquet 生成 RL 数据）
 echo ""

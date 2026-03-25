@@ -1003,15 +1003,24 @@ def apply_all_patches(project_dir=PROJECT_DIR, optim_tolerant=False):
     Args:
         optim_tolerant: 是否打 optimizer 容错补丁（仅在从损坏 checkpoint 恢复时需要）
     """
-    patch_sglang_videoinput_compat()
-    patch_sglang_outlines_compat()
-    patch_sglang_deepgemm_compat()
+    import torch
+    torch_major, torch_minor = int(torch.__version__.split(".")[0]), int(torch.__version__.split(".")[1])
+    needs_legacy_patches = torch_minor < 6  # PyTorch < 2.6 需要额外兼容补丁
+
+    if needs_legacy_patches:
+        print(f"[patches] PyTorch {torch.__version__} < 2.6, applying legacy compat patches")
+        patch_sglang_videoinput_compat()
+        patch_sglang_outlines_compat()
+        patch_sglang_deepgemm_compat()
+        patch_verl_dtensor_compat()
+        patch_verl_async_import()
+    else:
+        print(f"[patches] PyTorch {torch.__version__} >= 2.6, skipping legacy compat patches")
+
+    # 通用补丁（所有 PyTorch 版本都需要）
     patch_verl_force_cuda()
     patch_verl_fsdp_cuda_diag()
     patch_verl_fsdp_clip_grad()
-    patch_verl_dtensor_compat()
-    patch_verl_async_import()
-    # patch_verl_skip_agent_loop()  # 禁用：此补丁会把 AgentLoopManager 初始化失败静默吞掉，导致 async_rollout_manager=None
     clean_agent_loop_patch()  # 恢复被旧补丁修改的 ray_trainer.py
     patch_verl_rocr_fix()
     ensure_clean_verl_reward()
