@@ -849,6 +849,53 @@ def patch_sglang_outlines_compat():
     print(f"[patch] Patched sglang adapter.py for outlines compat ({target_file})")
 
 
+SGLANG_DEEPGEMM_MARKER = "# [kernel-rl-deepgemm-compat]"
+
+
+def patch_sglang_deepgemm_compat():
+    """修改 sglang 的 fp8_kernel.py 使 deep_gemm import 容错。
+
+    deep_gemm 编译时用了新版 PyTorch ABI，与 torch 2.4 不兼容。
+    我们不用 FP8 量化，让 import 失败时优雅跳过。
+    """
+    try:
+        import sglang
+        sglang_dir = os.path.dirname(sglang.__file__)
+    except ImportError:
+        print("[patch] sglang not installed, skipping deep_gemm patch")
+        return
+
+    target_file = os.path.join(sglang_dir, "srt", "layers", "quantization", "fp8_kernel.py")
+    if not os.path.isfile(target_file):
+        print(f"[patch] {target_file} not found, skipping deep_gemm patch")
+        return
+
+    with open(target_file) as f:
+        content = f.read()
+
+    if SGLANG_DEEPGEMM_MARKER in content:
+        print("[patch] sglang deep_gemm compat already applied")
+        return
+
+    # 把 "import deep_gemm" 替换成 try/except
+    old = "import deep_gemm"
+    if old not in content:
+        print("[patch] 'import deep_gemm' not found in fp8_kernel.py, skipping")
+        return
+
+    new = (
+        f"try:  {SGLANG_DEEPGEMM_MARKER}\n"
+        f"    import deep_gemm  {SGLANG_DEEPGEMM_MARKER}\n"
+        f"except (ImportError, OSError):  {SGLANG_DEEPGEMM_MARKER}\n"
+        f"    deep_gemm = None  {SGLANG_DEEPGEMM_MARKER}"
+    )
+    content = content.replace(old, new, 1)
+
+    with open(target_file, "w") as f:
+        f.write(content)
+    print(f"[patch] Patched sglang fp8_kernel.py for deep_gemm compat ({target_file})")
+
+
 SGLANG_VIDEOINPUT_MARKER = "# [kernel-rl-videoinput-compat]"
 
 
@@ -916,6 +963,7 @@ def apply_all_patches(project_dir=PROJECT_DIR, optim_tolerant=False):
     """
     patch_sglang_videoinput_compat()
     patch_sglang_outlines_compat()
+    patch_sglang_deepgemm_compat()
     patch_verl_force_cuda()
     patch_verl_fsdp_cuda_diag()
     patch_verl_fsdp_clip_grad()
