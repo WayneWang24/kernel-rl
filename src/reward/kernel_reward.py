@@ -830,9 +830,26 @@ def compute_score_auto(
     - str → compute_score（Triton 原始格式）
     """
     if isinstance(ground_truth, dict):
-        # CUDA 后端：KernelBench 任务（默认走 CUDA compile+run）
-        if "task_id" in ground_truth:
-            backend = ground_truth.get("backend", "cuda")
+        # 优先按 format 字段路由（混合数据集中 parquet schema 合并后所有 key 都存在，
+        # 缺失值为 None，所以用 .get() 而非 "key in dict" 判断）
+        fmt = ground_truth.get("format")
+        if fmt == "original":
+            # KernelBook 原始格式（混合数据集中统一为 dict）
+            return compute_score(
+                data_source, solution_str, ground_truth.get("python_code", ""), extra_info, **kwargs
+            )
+        if fmt == "cuda":
+            return compute_score_cuda(
+                data_source, solution_str, ground_truth, extra_info, **kwargs
+            )
+        if fmt == "modelnew":
+            return compute_score_modelnew(
+                data_source, solution_str, ground_truth, extra_info, **kwargs
+            )
+
+        # KernelBench 任务（有 task_id 且非 None）
+        if ground_truth.get("task_id") is not None:
+            backend = ground_truth.get("backend") or "cuda"
             if backend == "cuda":
                 return compute_score_cuda(
                     data_source, solution_str, ground_truth, extra_info, **kwargs
@@ -841,25 +858,12 @@ def compute_score_auto(
                 return compute_score_modelnew(
                     data_source, solution_str, ground_truth, extra_info, **kwargs
                 )
-        # 显式标记 CUDA 格式
-        if ground_truth.get("format") == "cuda":
-            return compute_score_cuda(
-                data_source, solution_str, ground_truth, extra_info, **kwargs
-            )
-        if ground_truth.get("format") == "modelnew":
-            # KernelBook ModelNew 格式 RL 数据
-            return compute_score_modelnew(
-                data_source, solution_str, ground_truth, extra_info, **kwargs
-            )
-        if ground_truth.get("format") == "original":
-            # KernelBook 原始格式（混合数据集中统一为 dict）
+
+        # KernelBook 旧格式 RL 数据
+        triton_code = ground_truth.get("triton_code")
+        if triton_code is not None:
             return compute_score(
-                data_source, solution_str, ground_truth.get("python_code", ""), extra_info, **kwargs
-            )
-        if "triton_code" in ground_truth:
-            # KernelBook 原始格式 RL 数据，用 triton_code 作为 ground_truth
-            return compute_score(
-                data_source, solution_str, ground_truth["triton_code"], extra_info, **kwargs
+                data_source, solution_str, triton_code, extra_info, **kwargs
             )
     return compute_score(
         data_source, solution_str, ground_truth, extra_info, **kwargs
