@@ -75,7 +75,6 @@ torchrun --standalone --nnodes=1 --nproc_per_node=2 \
     model.lora_alpha=128 \
     model.target_modules=all-linear \
     model.use_liger=false \
-    model.override_config.attn_implementation=sdpa \
     trainer.total_epochs=3 \
     trainer.default_local_dir="$CHECKPOINT_DIR" \
     trainer.save_freq=200 \
