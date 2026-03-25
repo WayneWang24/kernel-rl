@@ -344,12 +344,6 @@ def patch_verl_dtensor_compat():
     verl_root = os.path.dirname(verl_spec.origin)
 
     old_import = "from torch.distributed.tensor import DTensor"
-    new_import = (
-        "try:  " + DTENSOR_PATCH_MARKER + "\n"
-        "    from torch.distributed.tensor import DTensor  " + DTENSOR_PATCH_MARKER + "\n"
-        "except ImportError:  " + DTENSOR_PATCH_MARKER + "\n"
-        "    from torch.distributed._tensor import DTensor  " + DTENSOR_PATCH_MARKER
-    )
 
     patched_files = 0
     for root, dirs, files in os.walk(verl_root):
@@ -358,11 +352,27 @@ def patch_verl_dtensor_compat():
                 continue
             fpath = os.path.join(root, fname)
             with open(fpath) as f:
-                content = f.read()
-            if old_import in content and DTENSOR_PATCH_MARKER not in content:
-                content = content.replace(old_import, new_import)
+                lines = f.readlines()
+
+            # 先清理之前可能打过的坏补丁
+            lines = [l for l in lines if DTENSOR_PATCH_MARKER not in l]
+
+            new_lines = []
+            found = False
+            for line in lines:
+                if old_import in line and not line.lstrip().startswith("#"):
+                    indent = line[: len(line) - len(line.lstrip())]
+                    new_lines.append(f"{indent}try:  {DTENSOR_PATCH_MARKER}\n")
+                    new_lines.append(f"{indent}    from torch.distributed.tensor import DTensor  {DTENSOR_PATCH_MARKER}\n")
+                    new_lines.append(f"{indent}except ImportError:  {DTENSOR_PATCH_MARKER}\n")
+                    new_lines.append(f"{indent}    from torch.distributed._tensor import DTensor  {DTENSOR_PATCH_MARKER}\n")
+                    found = True
+                else:
+                    new_lines.append(line)
+
+            if found:
                 with open(fpath, "w") as f:
-                    f.write(content)
+                    f.writelines(new_lines)
                 patched_files += 1
 
     if patched_files:
