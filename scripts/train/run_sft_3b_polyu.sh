@@ -68,8 +68,8 @@ torchrun --standalone --nnodes=1 --nproc_per_node=2 \
     data.micro_batch_size_per_gpu=4 \
     data.max_length=4096 \
     data.truncation=left \
-    data.multiturn.enable=true \
-    data.multiturn.messages_key=messages \
+    +data.multiturn.enable=true \
+    +data.multiturn.messages_key=messages \
     model.partial_pretrain="$MODEL_PATH" \
     model.enable_gradient_checkpointing=true \
     model.lora_rank=64 \
