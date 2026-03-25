@@ -328,44 +328,56 @@ DTENSOR_PATCH_MARKER = "# [kernel-rl-dtensor-compat]"
 
 
 def patch_verl_dtensor_compat():
-    """在 PyTorch 2.4 中创建 torch.distributed.tensor shim 包。
+    """给 PyTorch 2.4 的 torch.distributed.tensor 追加缺失的 DTensor 导出。
 
-    PyTorch 2.5+ 把 torch.distributed._tensor 移到了 torch.distributed.tensor。
-    verl 0.7.0+ 使用新路径，在 PyTorch 2.4 上会 ImportError。
-    不再逐文件 patch，而是创建一个 shim 包让所有 import 都能工作。
+    PyTorch 2.4 已有 torch/distributed/tensor/ 包（含 parallel/ 等子模块），
+    但不导出 DTensor/DTensorSpec 等（它们在 torch.distributed._tensor 中）。
+    verl 0.7.0+ 做 `from torch.distributed.tensor import DTensor`，会失败。
+    我们在现有 __init__.py 末尾追加 re-export 即可，不覆盖原始内容。
     """
+    SHIM_MARKER = "# [kernel-rl-dtensor-shim]"
+
     try:
         from torch.distributed.tensor import DTensor  # noqa: F401
-        print("[patch] torch.distributed.tensor already available, no shim needed")
+        print("[patch] torch.distributed.tensor.DTensor already available")
         return
-    except ImportError:
+    except (ImportError, AttributeError):
         pass
 
     import torch.distributed
     dist_dir = os.path.dirname(torch.distributed.__file__)
-    tensor_pkg = os.path.join(dist_dir, "tensor")
+    tensor_init = os.path.join(dist_dir, "tensor", "__init__.py")
 
-    # 如果已有 tensor.py 文件（不太可能），先备份
-    tensor_file = tensor_pkg + ".py"
-    if os.path.isfile(tensor_file) and not os.path.isdir(tensor_pkg):
-        os.rename(tensor_file, tensor_file + ".bak")
+    if not os.path.isfile(tensor_init):
+        # 没有 tensor 包，创建 shim 目录
+        os.makedirs(os.path.join(dist_dir, "tensor"), exist_ok=True)
+        with open(tensor_init, "w") as f:
+            f.write(f'{SHIM_MARKER}\nfrom torch.distributed._tensor import DTensor  {SHIM_MARKER}\n')
+        print(f"[patch] Created torch.distributed.tensor shim at {tensor_init}")
+        return
 
-    os.makedirs(tensor_pkg, exist_ok=True)
+    with open(tensor_init) as f:
+        content = f.read()
 
-    shim_init = '''\
-"""Shim: redirect torch.distributed.tensor -> torch.distributed._tensor (PyTorch 2.4 compat)"""
-from torch.distributed._tensor import *  # noqa: F401,F403
-from torch.distributed._tensor import DTensor  # noqa: F401
-# Re-export submodules
-try:
-    from torch.distributed._tensor.placement_types import *  # noqa: F401,F403
-except ImportError:
-    pass
-'''
-    shim_path = os.path.join(tensor_pkg, "__init__.py")
-    with open(shim_path, "w") as f:
-        f.write(shim_init)
-    print(f"[patch] Created torch.distributed.tensor shim at {tensor_pkg}/")
+    if SHIM_MARKER in content:
+        print("[patch] DTensor shim already applied")
+        return
+
+    # 追加到现有 __init__.py 末尾
+    shim_code = f"""
+# Re-export from _tensor for verl compat (PyTorch 2.4)  {SHIM_MARKER}
+try:  {SHIM_MARKER}
+    from torch.distributed._tensor import DTensor  {SHIM_MARKER}
+except ImportError:  {SHIM_MARKER}
+    pass  {SHIM_MARKER}
+try:  {SHIM_MARKER}
+    from torch.distributed._tensor.placement_types import Placement, Replicate, Shard  {SHIM_MARKER}
+except ImportError:  {SHIM_MARKER}
+    pass  {SHIM_MARKER}
+"""
+    with open(tensor_init, "a") as f:
+        f.write(shim_code)
+    print(f"[patch] Appended DTensor re-exports to {tensor_init}")
 
 
 # ============================================================
