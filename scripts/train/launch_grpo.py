@@ -787,22 +787,60 @@ def patch_verl_fsdp_cuda_diag():
 # SGLang 0.4.4 的 qwen2_5_vl_config.py 导入 transformers.image_utils.VideoInput，
 # 但 transformers 4.57+ 已移除此类型。注入一个 dummy 类型即可。
 # ============================================================
-def patch_sglang_videoinput_compat():
-    """给 transformers.image_utils 注入 VideoInput（如果不存在）。"""
-    try:
-        from transformers.image_utils import VideoInput
-        print("[patch] transformers.image_utils.VideoInput already exists")
-        return
-    except ImportError:
-        pass
+SGLANG_VIDEOINPUT_MARKER = "# [kernel-rl-videoinput-compat]"
 
+
+def patch_sglang_videoinput_compat():
+    """修改 sglang 的 qwen2_5_vl_config.py 使 VideoInput import 容错。
+
+    SGLang 0.4.4 从 transformers.image_utils 导入 VideoInput，
+    但 transformers 4.57+ 已移除该类型。直接在文件层面修补，
+    这样 Ray worker 进程也能读到。
+    """
     try:
-        import transformers.image_utils as _img_utils
-        # VideoInput 在旧版 transformers 中是 List[List[ImageInput]]
-        _img_utils.VideoInput = list
-        print("[patch] Injected dummy VideoInput into transformers.image_utils")
-    except Exception as e:
-        print(f"[patch] WARNING: Failed to inject VideoInput: {e}")
+        import sglang
+        sglang_dir = os.path.dirname(sglang.__file__)
+    except ImportError:
+        print("[patch] sglang not installed, skipping VideoInput patch")
+        return
+
+    target_file = os.path.join(sglang_dir, "srt", "configs", "qwen2_5_vl_config.py")
+    if not os.path.isfile(target_file):
+        print(f"[patch] {target_file} not found, skipping VideoInput patch")
+        return
+
+    with open(target_file) as f:
+        content = f.read()
+
+    if SGLANG_VIDEOINPUT_MARKER in content:
+        print("[patch] sglang VideoInput compat already applied")
+        return
+
+    # 找到 from transformers.image_utils import ( 这个 import 块，替换为 try/except
+    old_import = "from transformers.image_utils import ("
+    if old_import not in content:
+        print("[patch] sglang: VideoInput import line not found, skipping")
+        return
+
+    # 找到完整的 import 语句（可能多行）
+    start = content.index(old_import)
+    end = content.index(")", start) + 1
+    import_block = content[start:end]
+
+    # 用 try/except 包裹，失败时定义 dummy
+    replacement = (
+        f"try:  {SGLANG_VIDEOINPUT_MARKER}\n"
+        f"    {import_block}\n"
+        f"except ImportError:  {SGLANG_VIDEOINPUT_MARKER}\n"
+        f"    from transformers.image_utils import ImageInput  {SGLANG_VIDEOINPUT_MARKER}\n"
+        f"    VideoInput = list  {SGLANG_VIDEOINPUT_MARKER}"
+    )
+
+    content = content[:start] + replacement + content[end:]
+
+    with open(target_file, "w") as f:
+        f.write(content)
+    print(f"[patch] Patched sglang qwen2_5_vl_config.py for VideoInput compat ({target_file})")
 
 
 # ============================================================
