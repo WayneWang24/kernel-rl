@@ -13,6 +13,37 @@ import torch
 from pathlib import Path
 
 
+def _detensor(state_dict: dict) -> dict:
+    """Convert any DTensor values to regular torch.Tensor.
+
+    Uses to_local() which works without distributed init.
+    Falls back to full_tensor() then ._local_tensor if needed.
+    """
+    try:
+        from torch.distributed._tensor import DTensor
+    except ImportError:
+        return state_dict
+
+    out = {}
+    n_converted = 0
+    for k, v in state_dict.items():
+        if isinstance(v, DTensor):
+            try:
+                out[k] = v.to_local()
+            except Exception:
+                try:
+                    out[k] = v.full_tensor()
+                except Exception:
+                    # Last resort: access internal storage
+                    out[k] = v._local_tensor
+            n_converted += 1
+        else:
+            out[k] = v
+    if n_converted:
+        print(f"  Converted {n_converted}/{len(state_dict)} DTensor -> Tensor")
+    return out
+
+
 def merge_fsdp_to_hf(ckpt_dir: str, output_dir: str):
     actor_dir = Path(ckpt_dir) / "actor"
     hf_dir = actor_dir / "huggingface"
@@ -32,6 +63,7 @@ def merge_fsdp_to_hf(ckpt_dir: str, output_dir: str):
         size_gb = s.stat().st_size / 1e9
         print(f"Loading {s.name} ({size_gb:.2f} GB)...")
         state = torch.load(s, map_location="cpu", weights_only=False)
+        state = _detensor(state)
         states.append(state)
         print(f"  Keys: {len(state)}")
 
