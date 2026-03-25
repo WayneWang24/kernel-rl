@@ -787,6 +787,68 @@ def patch_verl_fsdp_cuda_diag():
 # SGLang 0.4.4 的 qwen2_5_vl_config.py 导入 transformers.image_utils.VideoInput，
 # 但 transformers 4.57+ 已移除此类型。注入一个 dummy 类型即可。
 # ============================================================
+SGLANG_COMPAT_MARKER = "# [kernel-rl-sglang-compat]"
+
+
+def patch_sglang_outlines_compat():
+    """修改 sglang 的 openai_api/adapter.py 使 outlines import 容错。
+
+    outlines 依赖 pyairports 等冷门包，在 HPC 上难安装。
+    我们不使用 structured generation，让 import 失败时优雅跳过。
+    """
+    try:
+        import sglang
+        sglang_dir = os.path.dirname(sglang.__file__)
+    except ImportError:
+        print("[patch] sglang not installed, skipping outlines patch")
+        return
+
+    target_file = os.path.join(sglang_dir, "srt", "openai_api", "adapter.py")
+    if not os.path.isfile(target_file):
+        print(f"[patch] {target_file} not found, skipping outlines patch")
+        return
+
+    with open(target_file) as f:
+        content = f.read()
+
+    if SGLANG_COMPAT_MARKER in content:
+        print("[patch] sglang outlines compat already applied")
+        return
+
+    # 找到 outlines import 块并用 try/except 包裹
+    # sglang 0.4.4 有两个 outlines import（行 30 和行 34，在 try/except 中）
+    # 我们在文件开头插入一个 mock outlines 模块
+    mock_code = (
+        f"# Mock outlines if unavailable  {SGLANG_COMPAT_MARKER}\n"
+        f"try:  {SGLANG_COMPAT_MARKER}\n"
+        f"    import outlines  {SGLANG_COMPAT_MARKER}\n"
+        f"except (ImportError, ModuleNotFoundError):  {SGLANG_COMPAT_MARKER}\n"
+        f"    import types as _types  {SGLANG_COMPAT_MARKER}\n"
+        f"    outlines = _types.ModuleType('outlines')  {SGLANG_COMPAT_MARKER}\n"
+        f"    outlines.fsm = _types.ModuleType('outlines.fsm')  {SGLANG_COMPAT_MARKER}\n"
+        f"    outlines.fsm.json_schema = _types.ModuleType('outlines.fsm.json_schema')  {SGLANG_COMPAT_MARKER}\n"
+        f"    outlines.integrations = _types.ModuleType('outlines.integrations')  {SGLANG_COMPAT_MARKER}\n"
+        f"    outlines.integrations.utils = _types.ModuleType('outlines.integrations.utils')  {SGLANG_COMPAT_MARKER}\n"
+        f"    def _noop(*a, **kw): return ''  {SGLANG_COMPAT_MARKER}\n"
+        f"    outlines.fsm.json_schema.convert_json_schema_to_str = _noop  {SGLANG_COMPAT_MARKER}\n"
+        f"    outlines.integrations.utils.convert_json_schema_to_str = _noop  {SGLANG_COMPAT_MARKER}\n"
+        f"    import sys  {SGLANG_COMPAT_MARKER}\n"
+        f"    sys.modules['outlines'] = outlines  {SGLANG_COMPAT_MARKER}\n"
+        f"    sys.modules['outlines.fsm'] = outlines.fsm  {SGLANG_COMPAT_MARKER}\n"
+        f"    sys.modules['outlines.fsm.json_schema'] = outlines.fsm.json_schema  {SGLANG_COMPAT_MARKER}\n"
+        f"    sys.modules['outlines.integrations'] = outlines.integrations  {SGLANG_COMPAT_MARKER}\n"
+        f"    sys.modules['outlines.integrations.utils'] = outlines.integrations.utils  {SGLANG_COMPAT_MARKER}\n"
+        f"    import warnings; warnings.warn('outlines not available, structured generation disabled')  {SGLANG_COMPAT_MARKER}\n"
+        f"\n"
+    )
+
+    # 插入到文件最开头（在所有 import 之前）
+    content = mock_code + content
+    with open(target_file, "w") as f:
+        f.write(content)
+    print(f"[patch] Patched sglang adapter.py for outlines compat ({target_file})")
+
+
 SGLANG_VIDEOINPUT_MARKER = "# [kernel-rl-videoinput-compat]"
 
 
@@ -853,6 +915,7 @@ def apply_all_patches(project_dir=PROJECT_DIR, optim_tolerant=False):
         optim_tolerant: 是否打 optimizer 容错补丁（仅在从损坏 checkpoint 恢复时需要）
     """
     patch_sglang_videoinput_compat()
+    patch_sglang_outlines_compat()
     patch_verl_force_cuda()
     patch_verl_fsdp_cuda_diag()
     patch_verl_fsdp_clip_grad()
