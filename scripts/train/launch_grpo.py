@@ -871,28 +871,32 @@ def patch_sglang_deepgemm_compat():
         return
 
     with open(target_file) as f:
-        content = f.read()
+        lines = f.readlines()
 
-    if SGLANG_DEEPGEMM_MARKER in content:
-        print("[patch] sglang deep_gemm compat already applied")
-        return
+    # 先清理之前可能打过的坏补丁
+    lines = [l for l in lines if SGLANG_DEEPGEMM_MARKER not in l]
 
-    # 把 "import deep_gemm" 替换成 try/except
-    old = "import deep_gemm"
-    if old not in content:
+    # 找到 "import deep_gemm" 行并用 try/except 包裹（保留原始缩进）
+    new_lines = []
+    patched = False
+    for line in lines:
+        stripped = line.rstrip("\n")
+        if not patched and "import deep_gemm" in stripped and not stripped.lstrip().startswith("#"):
+            indent = line[: len(line) - len(line.lstrip())]
+            new_lines.append(f"{indent}try:  {SGLANG_DEEPGEMM_MARKER}\n")
+            new_lines.append(f"{indent}    import deep_gemm  {SGLANG_DEEPGEMM_MARKER}\n")
+            new_lines.append(f"{indent}except (ImportError, OSError):  {SGLANG_DEEPGEMM_MARKER}\n")
+            new_lines.append(f"{indent}    deep_gemm = None  {SGLANG_DEEPGEMM_MARKER}\n")
+            patched = True
+        else:
+            new_lines.append(line)
+
+    if not patched:
         print("[patch] 'import deep_gemm' not found in fp8_kernel.py, skipping")
         return
 
-    new = (
-        f"try:  {SGLANG_DEEPGEMM_MARKER}\n"
-        f"    import deep_gemm  {SGLANG_DEEPGEMM_MARKER}\n"
-        f"except (ImportError, OSError):  {SGLANG_DEEPGEMM_MARKER}\n"
-        f"    deep_gemm = None  {SGLANG_DEEPGEMM_MARKER}"
-    )
-    content = content.replace(old, new, 1)
-
     with open(target_file, "w") as f:
-        f.write(content)
+        f.writelines(new_lines)
     print(f"[patch] Patched sglang fp8_kernel.py for deep_gemm compat ({target_file})")
 
 
