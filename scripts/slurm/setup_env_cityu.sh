@@ -11,8 +11,9 @@
 #
 # 兼容性：
 #   CUDA Driver 535 → max CUDA 12.2 → cu121 wheels only
-#   PyTorch 2.4.0+cu121 + vLLM 0.6.3 + verl 0.4.1
-#   verl 0.4.1 使用老 rollout 架构（不需要 vLLM 0.8+）
+#   PyTorch 2.5.1+cu121 + vLLM 0.7.3 + verl 0.4.1
+#   verl 0.4.1 使用老 rollout 架构（sync mode, 不需要 vLLM 0.8+）
+#   LoRA 支持需要 vLLM >= 0.7.3
 # ============================================================
 
 set -euxo pipefail
@@ -33,9 +34,9 @@ conda activate kernel-rl
 
 # 2. 安装核心依赖
 # CUDA Driver 535 只支持到 CUDA 12.2，必须用 cu121 wheels
-# verl 0.4.1: 有 GRPO + LoRA，用老 rollout（不需要 AgentLoopManager/vLLM 0.8+）
-pip install torch==2.4.0 --index-url https://download.pytorch.org/whl/cu121
-pip install vllm==0.6.3.post1
+# verl 0.4.1 LoRA 需要 vLLM >= 0.7.3, vLLM 0.7.3 需要 PyTorch 2.5.1
+pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+pip install vllm==0.7.3
 pip install verl==0.4.1 --no-deps
 pip install flash-attn --no-build-isolation
 pip install pandas pyarrow ray tensordict
