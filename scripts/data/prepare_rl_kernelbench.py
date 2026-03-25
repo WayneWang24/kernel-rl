@@ -61,7 +61,7 @@ def parse_task_file(filepath: Path) -> dict:
 def build_rl_record(task: dict, backend: str = "cuda") -> dict:
     """将单个任务转为 verl RL 格式。"""
     prompt_template = PROMPT_TEMPLATES[backend]
-    prompt_text = prompt_template.format(model_code=task["model_code"].strip())
+    prompt_text = prompt_template.replace("{model_code}", task["model_code"].strip())
 
     ground_truth = {
         "task_id": task["task_id"],
