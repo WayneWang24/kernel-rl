@@ -115,6 +115,24 @@ from launch_grpo import apply_all_patches
 apply_all_patches('${PROJECT_DIR}')
 "
 
+# ===== Step 1.5: 修复 Click Sentinel deepcopy bug =====
+python -c "
+import click._utils, inspect
+src = inspect.getfile(click._utils)
+with open(src) as f:
+    content = f.read()
+if '__deepcopy__' not in content:
+    content = content.replace(
+        'class Sentinel(enum.Enum):',
+        'class Sentinel(enum.Enum):\n    def __deepcopy__(self, memo):\n        return self\n    def __copy__(self):\n        return self\n',
+    )
+    with open(src, 'w') as f:
+        f.write(content)
+    print('[patch] Click Sentinel patched for deepcopy')
+else:
+    print('[patch] Click Sentinel already patched')
+"
+
 # ===== Step 2: 数据路径探测 =====
 # 优先 CUDA 数据 → KernelBook split → KernelBench Triton → KernelBook 原始
 if [ -f "${PROJECT_DIR}/data/rl_kernelbench_cuda/train.parquet" ]; then

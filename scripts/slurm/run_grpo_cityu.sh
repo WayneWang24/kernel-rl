@@ -141,6 +141,28 @@ from launch_grpo import apply_all_patches
 apply_all_patches('${PROJECT_DIR}')
 "
 
+# ===== Step 1.5: 修复 Click Sentinel deepcopy bug =====
+# Ray 2.40 的 ray start 会 deepcopy Click 命令对象，Click 的 Sentinel(enum.Enum)
+# 用 object() 作值导致 deepcopy 失败。给 Sentinel 加 __deepcopy__ 方法。
+echo "=== Patching Click Sentinel for Ray compat ==="
+srun --nodes=1 --ntasks=1 -w "$head_node" \
+    python -c "
+import click._utils, inspect
+src = inspect.getfile(click._utils)
+with open(src) as f:
+    content = f.read()
+if '__deepcopy__' not in content:
+    content = content.replace(
+        'class Sentinel(enum.Enum):',
+        'class Sentinel(enum.Enum):\n    def __deepcopy__(self, memo):\n        return self\n    def __copy__(self):\n        return self\n',
+    )
+    with open(src, 'w') as f:
+        f.write(content)
+    print('[patch] Click Sentinel patched for deepcopy')
+else:
+    print('[patch] Click Sentinel already patched')
+"
+
 # ===== Step 2: 启动 Ray 集群（使用检测到的 GPU）=====
 # 每个节点只暴露检测通过的 GPU，截断到 MIN_GPUS 保持一致
 HEAD_GPUS_ALL=$(cat "${GPU_CHECK_DIR}/${head_node}.txt" | tr -d '\n')
