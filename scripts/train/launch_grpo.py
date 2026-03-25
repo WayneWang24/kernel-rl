@@ -782,6 +782,30 @@ def patch_verl_fsdp_cuda_diag():
 
 
 # ============================================================
+# Step 0j: 补丁 SGLang 的 VideoInput 兼容性
+#
+# SGLang 0.4.4 的 qwen2_5_vl_config.py 导入 transformers.image_utils.VideoInput，
+# 但 transformers 4.57+ 已移除此类型。注入一个 dummy 类型即可。
+# ============================================================
+def patch_sglang_videoinput_compat():
+    """给 transformers.image_utils 注入 VideoInput（如果不存在）。"""
+    try:
+        from transformers.image_utils import VideoInput
+        print("[patch] transformers.image_utils.VideoInput already exists")
+        return
+    except ImportError:
+        pass
+
+    try:
+        import transformers.image_utils as _img_utils
+        # VideoInput 在旧版 transformers 中是 List[List[ImageInput]]
+        _img_utils.VideoInput = list
+        print("[patch] Injected dummy VideoInput into transformers.image_utils")
+    except Exception as e:
+        print(f"[patch] WARNING: Failed to inject VideoInput: {e}")
+
+
+# ============================================================
 # 公共辅助：应用所有补丁
 # ============================================================
 def apply_all_patches(project_dir=PROJECT_DIR, optim_tolerant=False):
@@ -790,6 +814,7 @@ def apply_all_patches(project_dir=PROJECT_DIR, optim_tolerant=False):
     Args:
         optim_tolerant: 是否打 optimizer 容错补丁（仅在从损坏 checkpoint 恢复时需要）
     """
+    patch_sglang_videoinput_compat()
     patch_verl_force_cuda()
     patch_verl_fsdp_cuda_diag()
     patch_verl_fsdp_clip_grad()
