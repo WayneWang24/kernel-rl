@@ -107,18 +107,45 @@
 
 ---
 
-## Exp-3: GRPO 7B (CityU HPC)
+## Exp-2b: GRPO 3B + compile+run reward (PolyU HPC)
 
-**目的**：7B 模型正式 RL 训练
+**目的**：3B 模型用 compile+run reward 重训，验证实际编译运行 reward 的效果
+
+| 项目 | 值 |
+|------|-----|
+| 模型 | Qwen2.5-Coder-3B-Instruct (base 或 SFT checkpoint) |
+| 方法 | GRPO, full fine-tuning (无 LoRA) |
+| 数据 | rl_kernelbench_cuda (KernelBench CUDA 格式, ground_truth 含 task_id) |
+| Reward | compute_score_auto → compute_score_cuda (静态+编译+运行验证) |
+| 硬件 | PolyU HPC, 2× A100 80GB, 单节点 |
+| Rollout | vLLM, TP=1, gpu_memory_utilization=0.5 |
+| Checkpoint | `checkpoints/grpo_3b_cuda/` |
+| 脚本 | `scripts/train/run_grpo_polyu.sh` |
+
+### Reward 三阶段评分
+- Phase 1 (静态 0.0-0.5): 语法、ModelNew 类、CUDA kernel 存在
+- Phase 2 (编译 0.6-0.7): load_inline 编译成功、ModelNew 实例化
+- Phase 3 (运行 0.8-1.0): forward 无错、shape 匹配、值匹配(rtol=1e-2)
+
+### 状态
+- [ ] 准备 rl_kernelbench_cuda 数据
+- [ ] 提交 SLURM 训练
+- [ ] KernelBench 评测
+
+---
+
+## Exp-3: GRPO 7B + compile+run reward (CityU HPC)
+
+**目的**：7B 模型正式 RL 训练，使用 compile+run reward
 
 | 项目 | 值 |
 |------|-----|
 | 模型 | Qwen2.5-Coder-7B-Instruct → SFT checkpoint (`sft_modelnew_merged`) |
 | 方法 | GRPO, LoRA rank=64, alpha=16, target=all-linear |
-| 数据 | KernelBook split RL data (ModelNew 格式) |
-| Reward | compute_score_auto (静态分析) |
+| 数据 | rl_kernelbench_cuda (KernelBench CUDA 格式, ground_truth 含 task_id) |
+| Reward | compute_score_auto → compute_score_cuda (静态+编译+运行验证) |
 | 硬件 | CityU HPC, 2 节点 × 3× A100 40GB = 6 GPU |
-| Rollout | SGLang, flashinfer, gpu_memory_utilization=0.8 |
+| Rollout | vLLM, TP=1, gpu_memory_utilization=0.5 |
 | Checkpoint | `checkpoints/grpo_cuda/` |
 
 ### 超参数
@@ -133,13 +160,14 @@
 | max_prompt_length | 2048 |
 | max_response_length | 4096 |
 | gradient_checkpointing | true |
-| optimizer_offload | false |
-| param_offload | false |
+| optimizer_offload | true |
+| param_offload | true |
 | total_epochs | 3 |
 | save_freq | 50 |
 
 ### 状态
-- [ ] 等待 SLURM 资源分配
+- [ ] 准备 rl_kernelbench_cuda 数据
+- [ ] 提交 SLURM 训练
 - [ ] KernelBench 评测
 
 ---

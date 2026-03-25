@@ -50,29 +50,43 @@ python -c "import vllm; print(f'vLLM {vllm.__version__}')" 2>/dev/null || echo "
 python -c "import verl; print(f'verl {verl.__version__}')"
 nvcc --version || echo "nvcc not available on login node (OK, available on compute nodes)"
 
-# 4. 准备数据（从 cleaned parquet 生成 RL 数据）
+# 4. 准备 rl_kernelbench_cuda 数据（compile+run reward）
 echo ""
-echo "=== Preparing RL training data ==="
+echo "=== Preparing rl_kernelbench_cuda data (compile+run reward) ==="
 
-if [ -f "${PROJECT_DIR}/data/rl/train.parquet" ]; then
-    echo "RL data already exists, skipping"
-elif [ -f "${PROJECT_DIR}/data/split/rl/train.parquet" ]; then
-    echo "Split RL data already exists, skipping"
-elif [ -f "${PROJECT_DIR}/data/cleaned/kernelbook_clean.parquet" ]; then
-    echo "Generating RL data from cleaned parquet..."
-    if [ -f "${PROJECT_DIR}/scripts/data/prepare_split_data.py" ]; then
-        python "${PROJECT_DIR}/scripts/data/prepare_split_data.py" \
-            --input "${PROJECT_DIR}/data/cleaned/kernelbook_clean.parquet" \
-            --output_dir "${PROJECT_DIR}/data/split"
-    elif [ -f "${PROJECT_DIR}/scripts/data/prepare_rl_data.py" ]; then
-        python "${PROJECT_DIR}/scripts/data/prepare_rl_data.py"
-    else
-        echo "WARNING: No data preparation script found. Please prepare data manually."
-    fi
+KERNELBENCH_DIR="${HOME}/ChenweiWang/workspace/my-kernel-bench"
+if [ ! -d "$KERNELBENCH_DIR/data" ]; then
+    KERNELBENCH_DIR="${HOME}/workspace/my-kernel-bench"
+fi
+if [ ! -d "$KERNELBENCH_DIR/data" ]; then
+    KERNELBENCH_DIR="${HOME}/Code/my-kernel-bench"
+fi
+
+if [ -f "${PROJECT_DIR}/data/rl_kernelbench_cuda/train.parquet" ]; then
+    echo "rl_kernelbench_cuda data already exists, skipping"
+elif [ -d "$KERNELBENCH_DIR/data" ]; then
+    echo "Generating CUDA RL data from $KERNELBENCH_DIR..."
+    python "${PROJECT_DIR}/scripts/data/prepare_rl_kernelbench.py" \
+        --kernelbench_dir "$KERNELBENCH_DIR" \
+        --output_dir "${PROJECT_DIR}/data/rl_kernelbench_cuda" \
+        --backend cuda
 else
-    echo "WARNING: No source data found. Please copy data/rl/ or data/split/rl/ from old HPC."
-    echo "  Option 1: scp old-hpc:~/workspace/kernel-rl/data/rl/ ${PROJECT_DIR}/data/rl/"
-    echo "  Option 2: scp old-hpc:~/workspace/kernel-rl/data/split/ ${PROJECT_DIR}/data/split/"
+    echo "WARNING: my-kernel-bench not found. Please clone it first."
+    echo "  Then run: python scripts/data/prepare_rl_kernelbench.py \\"
+    echo "      --kernelbench_dir /path/to/my-kernel-bench \\"
+    echo "      --output_dir data/rl_kernelbench_cuda --backend cuda"
+fi
+
+# 4b. 旧数据（fallback，仅静态 reward）
+if [ ! -f "${PROJECT_DIR}/data/split/rl/train.parquet" ]; then
+    if [ -f "${PROJECT_DIR}/data/cleaned/kernelbook_clean.parquet" ]; then
+        echo "Generating KernelBook split RL data (fallback)..."
+        if [ -f "${PROJECT_DIR}/scripts/data/prepare_split_data.py" ]; then
+            python "${PROJECT_DIR}/scripts/data/prepare_split_data.py" \
+                --input "${PROJECT_DIR}/data/cleaned/kernelbook_clean.parquet" \
+                --output_dir "${PROJECT_DIR}/data/split"
+        fi
+    fi
 fi
 
 # 5. 创建日志目录
