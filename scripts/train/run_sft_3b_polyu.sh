@@ -61,7 +61,7 @@ echo ""
 
 # 2 GPU, 3B 模型 micro_batch 可以开到 4
 torchrun --standalone --nnodes=1 --nproc_per_node=2 \
-    -m verl.trainer.fsdp_sft_trainer \
+    -m verl.trainer.sft_trainer \
     data.train_files="$TRAIN_PATH" \
     data.val_files="$VAL_PATH" \
     data.train_batch_size=32 \
