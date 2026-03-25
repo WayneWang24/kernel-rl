@@ -352,18 +352,48 @@ def patch_verl_dtensor_compat():
                 continue
             fpath = os.path.join(root, fname)
             with open(fpath) as f:
-                lines = f.readlines()
+                content = f.read()
 
-            # 先清理之前可能打过的坏补丁
-            lines = [l for l in lines if DTENSOR_PATCH_MARKER not in l]
+            if old_import not in content and DTENSOR_PATCH_MARKER not in content:
+                continue  # 文件无关
 
+            lines = content.splitlines(keepends=True)
+
+            # 清理旧补丁 marker 行，但记住每个 marker 块的位置和缩进
+            clean_lines = []
+            marker_blocks = []  # [(insert_pos, indent)]
+            for line in lines:
+                if DTENSOR_PATCH_MARKER in line:
+                    if not marker_blocks or marker_blocks[-1][0] != len(clean_lines):
+                        indent = line[: len(line) - len(line.lstrip())]
+                        marker_blocks.append((len(clean_lines), indent))
+                else:
+                    clean_lines.append(line)
+
+            # 情况 A: 文件有旧 marker（之前 patch 过，可能坏了）
+            # 在每个 marker 块的位置插入正确的 try/except
+            if marker_blocks:
+                for pos, indent in reversed(marker_blocks):
+                    patch = [
+                        f"{indent}try:  {DTENSOR_PATCH_MARKER}\n",
+                        f"{indent}    {old_import}  {DTENSOR_PATCH_MARKER}\n",
+                        f"{indent}except ImportError:  {DTENSOR_PATCH_MARKER}\n",
+                        f"{indent}    from torch.distributed._tensor import DTensor  {DTENSOR_PATCH_MARKER}\n",
+                    ]
+                    clean_lines[pos:pos] = patch
+                with open(fpath, "w") as f:
+                    f.writelines(clean_lines)
+                patched_files += 1
+                continue
+
+            # 情况 B: 新文件，找到 import 行并包裹 try/except
             new_lines = []
             found = False
-            for line in lines:
+            for line in clean_lines:
                 if old_import in line and not line.lstrip().startswith("#"):
                     indent = line[: len(line) - len(line.lstrip())]
                     new_lines.append(f"{indent}try:  {DTENSOR_PATCH_MARKER}\n")
-                    new_lines.append(f"{indent}    from torch.distributed.tensor import DTensor  {DTENSOR_PATCH_MARKER}\n")
+                    new_lines.append(f"{indent}    {old_import}  {DTENSOR_PATCH_MARKER}\n")
                     new_lines.append(f"{indent}except ImportError:  {DTENSOR_PATCH_MARKER}\n")
                     new_lines.append(f"{indent}    from torch.distributed._tensor import DTensor  {DTENSOR_PATCH_MARKER}\n")
                     found = True
