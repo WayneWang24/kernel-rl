@@ -16,6 +16,7 @@
 #SBATCH --job-name=kernel-rl-grpo
 #SBATCH --partition=gpu3
 #SBATCH --nodes=2
+#SBATCH --nodelist=gpu13,gpu15
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=3
 #SBATCH --cpus-per-task=16
@@ -283,12 +284,12 @@ PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.mode=sync \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.45 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
     actor_rollout_ref.rollout.enforce_eager=true \
     actor_rollout_ref.rollout.free_cache_engine=true \
     actor_rollout_ref.rollout.load_format=safetensors \
-    actor_rollout_ref.rollout.max_model_len=4096 \
-    actor_rollout_ref.rollout.n=3 \
+    actor_rollout_ref.rollout.max_model_len=6144 \
+    actor_rollout_ref.rollout.n=5 \
     algorithm.use_kl_in_reward=false \
     custom_reward_function.path="$REWARD_FN_PATH" \
     custom_reward_function.name="$REWARD_FN_NAME" \
