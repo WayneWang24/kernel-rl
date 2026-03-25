@@ -131,21 +131,48 @@ def is_non_trivial(code: str, ground_truth: str) -> bool:
 # 训练时 Reward（快速版）
 # ============================================================
 
+def _try_compile_triton(code: str, timeout: int = 60) -> bool:
+    """尝试执行 Triton 代码模块，检查能否无错导入。"""
+    script = f'''import torch
+import torch.nn as nn
+import triton
+import triton.language as tl
+import numpy as np
+import sys
+
+try:
+{textwrap.indent(code, "    ")}
+    print("COMPILE_OK")
+except Exception as e:
+    print(f"COMPILE_FAIL: {{e}}", file=sys.stderr)
+    sys.exit(1)
+'''
+    try:
+        proc = _run_subprocess(script, timeout=timeout)
+        return proc.returncode == 0 and "COMPILE_OK" in proc.stdout
+    except Exception:
+        return False
+
+
 def compute_score(
     data_source: str,
     solution_str: str,
     ground_truth: str,
     extra_info: Optional[dict] = None,
+    try_compile: bool = True,
+    compile_timeout: int = 60,
     **kwargs,
 ) -> float:
     """
-    快速 reward 函数（训练时用）。纯静态分析。
+    Triton reward 函数（训练时用）。静态分析 + 可选编译检查。
 
     Args:
         data_source: 数据源标识
         solution_str: 模型生成的完整文本
         ground_truth: 参考 PyTorch 代码
         extra_info: 额外信息
+        try_compile: 是否尝试编译验证（默认 True）
+        compile_timeout: 编译超时秒数
 
     Returns:
         float: 0.0 ~ 1.0 的分层 reward
@@ -171,7 +198,12 @@ def compute_score(
     if not has_wrapper_function(code):
         return 0.6
 
-    # R5: 完整的 Triton kernel + wrapper
+    # R5: 完整结构 — 编译验证
+    if try_compile:
+        if not _try_compile_triton(code, timeout=compile_timeout):
+            return 0.7  # 结构完整但编译/导入失败
+
+    # R6: 编译通过
     score = 0.8
 
     # Bonus: 性能优化

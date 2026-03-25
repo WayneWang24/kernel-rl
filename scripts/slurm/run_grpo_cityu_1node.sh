@@ -135,8 +135,13 @@ else:
 "
 
 # ===== Step 2: 数据路径探测 =====
-# 优先 CUDA 数据 → KernelBook split → KernelBench Triton → KernelBook 原始
-if [ -f "${PROJECT_DIR}/data/rl_kernelbench_cuda/train.parquet" ]; then
+# 优先 混合数据 → CUDA 数据 → KernelBook split → KernelBench Triton → KernelBook 原始
+if [ -f "${PROJECT_DIR}/data/rl_mixed/train.parquet" ]; then
+    TRAIN_PATH="${PROJECT_DIR}/data/rl_mixed/train.parquet"
+    VAL_PATH="${PROJECT_DIR}/data/rl_mixed/val.parquet"
+    REWARD_FN_NAME="compute_score_auto"
+    echo "Using mixed RL data (KernelBook static+compile + KernelBench compile+run)"
+elif [ -f "${PROJECT_DIR}/data/rl_kernelbench_cuda/train.parquet" ]; then
     TRAIN_PATH="${PROJECT_DIR}/data/rl_kernelbench_cuda/train.parquet"
     VAL_PATH="${PROJECT_DIR}/data/rl_kernelbench_cuda/val.parquet"
     REWARD_FN_NAME="compute_score_auto"
