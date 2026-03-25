@@ -18,6 +18,26 @@ import os
 import pandas as pd
 
 
+def normalize_reward_model(rm):
+    """统一 reward_model 格式：ground_truth 全部转为 dict。
+
+    KernelBook 原始格式: {"ground_truth": "<python_code_string>"}
+    KernelBench 格式:    {"ground_truth": {"task_id": ..., "backend": "cuda", ...}}
+
+    统一后 KernelBook:   {"ground_truth": {"python_code": "...", "format": "original"}}
+    """
+    gt = rm.get("ground_truth")
+    if isinstance(gt, str):
+        return {
+            "style": rm.get("style", "rule"),
+            "ground_truth": {
+                "python_code": gt,
+                "format": "original",
+            },
+        }
+    return rm
+
+
 def main():
     parser = argparse.ArgumentParser(description="Merge KernelBook + KernelBench RL data")
     parser.add_argument("--kernelbook_dir", default="data/rl", help="KernelBook RL data dir")
@@ -35,6 +55,8 @@ def main():
         kb_path = os.path.join(args.kernelbook_dir, f"{split}.parquet")
         if os.path.exists(kb_path):
             df = pd.read_parquet(kb_path)
+            # 统一 ground_truth 为 dict 格式
+            df["reward_model"] = df["reward_model"].apply(normalize_reward_model)
             print(f"KernelBook {split}: {len(df)} rows")
             dfs.append(df)
         else:
@@ -67,21 +89,19 @@ def main():
         print(f"Total train rows: {len(df)}")
         print(f"Columns: {list(df.columns)}")
 
-        # 统计数据来源
         sources = df["data_source"].value_counts()
         for src, cnt in sources.items():
             print(f"  {src}: {cnt} ({cnt / len(df) * 100:.1f}%)")
 
-        # 检查 reward_model 格式
-        sample_kb = df[df["data_source"] == "kernelbook"].iloc[0] if "kernelbook" in sources else None
-        sample_bench = df[df["data_source"] == "kernelbench"].iloc[0] if "kernelbench" in sources else None
+        sample_kb = df[df["data_source"] == "kernelbook"].iloc[0] if "kernelbook" in sources.index else None
+        sample_bench = df[df["data_source"] == "kernelbench"].iloc[0] if "kernelbench" in sources.index else None
 
         if sample_kb is not None:
             gt = sample_kb["reward_model"]["ground_truth"]
-            print(f"\nKernelBook sample: ground_truth type={type(gt).__name__}, preview={str(gt)[:100]}...")
+            print(f"\nKernelBook sample: ground_truth type={type(gt).__name__}, keys={list(gt.keys())}")
         if sample_bench is not None:
             gt = sample_bench["reward_model"]["ground_truth"]
-            print(f"KernelBench sample: ground_truth type={type(gt).__name__}, keys={list(gt.keys()) if isinstance(gt, dict) else 'N/A'}")
+            print(f"KernelBench sample: ground_truth type={type(gt).__name__}, keys={list(gt.keys())}")
 
 
 if __name__ == "__main__":

@@ -851,6 +851,11 @@ def compute_score_auto(
             return compute_score_modelnew(
                 data_source, solution_str, ground_truth, extra_info, **kwargs
             )
+        if ground_truth.get("format") == "original":
+            # KernelBook 原始格式（混合数据集中统一为 dict）
+            return compute_score(
+                data_source, solution_str, ground_truth.get("python_code", ""), extra_info, **kwargs
+            )
         if "triton_code" in ground_truth:
             # KernelBook 原始格式 RL 数据，用 triton_code 作为 ground_truth
             return compute_score(
