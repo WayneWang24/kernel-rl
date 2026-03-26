@@ -75,6 +75,11 @@ torchrun --standalone --nnodes=1 --nproc_per_node=2 \
     model.lora_alpha=128 \
     model.target_modules=all-linear \
     model.use_liger=false \
+    optim.lr=2e-5 \
+    optim.lr_scheduler_type=cosine \
+    optim.lr_warmup_steps_ratio=0.05 \
+    optim.min_lr_ratio=0.1 \
+    optim.weight_decay=0.01 \
     trainer.total_epochs=3 \
     trainer.default_local_dir="$CHECKPOINT_DIR" \
     trainer.save_freq=200 \
