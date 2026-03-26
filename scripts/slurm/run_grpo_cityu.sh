@@ -56,9 +56,9 @@ unset ROCR_VISIBLE_DEVICES
 # GPU 管理由 Ray + patch_verl_force_cuda 补丁处理（同 1node 脚本注释）
 export WANDB_MODE=disabled
 
-# NCCL 修复：PCIe A100 之间 P2P 不可用，禁用后走 SHM
+# NCCL：PCIe A100 之间 P2P 不可用，但节点间有 100Gbps IB
 export NCCL_P2P_DISABLE=1
-export NCCL_IB_DISABLE=1
+# IB 可用（mlx5_0, 100Gbps），不再禁用
 export NCCL_DEBUG=WARN
 
 # 清理残留 Ray 集群
