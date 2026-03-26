@@ -138,15 +138,24 @@ def merge_fsdp_to_hf(ckpt_dir: str, output_dir: str):
         import json
         print("\nDetected LoRA checkpoint (PEFT format)")
 
-        # Read LoRA config
+        # Read LoRA config (try multiple locations)
+        adapter_config_path = shard_dir / "huggingface" / "adapter_config.json"
         if lora_meta_path.exists():
             with open(lora_meta_path) as f:
                 lora_meta = json.load(f)
             lora_r = lora_meta.get("r", 64)
             lora_alpha = lora_meta.get("lora_alpha", 128)
+            print(f"  Config source: {lora_meta_path}")
+        elif adapter_config_path.exists():
+            with open(adapter_config_path) as f:
+                adapter_cfg = json.load(f)
+            lora_r = adapter_cfg.get("r", 64)
+            lora_alpha = adapter_cfg.get("lora_alpha", 128)
+            print(f"  Config source: {adapter_config_path}")
         else:
             lora_r = 64
             lora_alpha = 128
+            print(f"  WARNING: No LoRA config found, using defaults r={lora_r}, alpha={lora_alpha}")
         scaling = lora_alpha / lora_r
         print(f"  LoRA r={lora_r}, alpha={lora_alpha}, scaling={scaling}")
 
@@ -184,7 +193,10 @@ def merge_fsdp_to_hf(ckpt_dir: str, output_dir: str):
                 base_keys[hf_key] = base_keys[hf_key].float() + (B @ A) * scaling
                 n_merged += 1
 
-        print(f"  Merged {n_merged} LoRA layers into base weights")
+        print(f"  Merged {n_merged}/{len(lora_a_keys)} LoRA layers into base weights")
+        if n_merged != len(lora_a_keys):
+            unmerged = set(lora_a_keys.keys()) - {m for m in lora_a_keys if "model." + m + ".weight" in base_keys and m in lora_b_keys}
+            print(f"  WARNING: {len(unmerged)} LoRA layers NOT merged: {list(unmerged)[:5]}")
 
         # Combine all keys
         remapped = {}

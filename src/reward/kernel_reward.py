@@ -32,7 +32,7 @@ from typing import Optional
 def extract_code_block(text: str) -> Optional[str]:
     """从模型输出中提取代码块。"""
     # 尝试 ```python ... ``` 或 ```triton ... ```
-    pattern = r"```(?:python|triton)?\s*\n(.*?)```"
+    pattern = r"```(?:python|triton|cuda|cpp|c\+\+)?\s*\n(.*?)```"
     matches = re.findall(pattern, text, re.DOTALL)
     if matches:
         return max(matches, key=len).strip()

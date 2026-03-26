@@ -96,7 +96,7 @@ def generate_solutions(
         level = task["level"]
         print(f"  [{i + 1}/{len(tasks)}] Level {level} / {task_id}...", end=" ", flush=True)
 
-        prompt = prompt_template.format(model_code=task["model_code"].strip())
+        prompt = prompt_template.replace("{model_code}", task["model_code"].strip())
 
         payload = {
             "model": model_name,
