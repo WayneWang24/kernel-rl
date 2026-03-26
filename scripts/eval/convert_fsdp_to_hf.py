@@ -130,6 +130,87 @@ def merge_fsdp_to_hf(ckpt_dir: str, output_dir: str):
         elif i == 5:
             print(f"  ... ({len(merged) - 5} more)")
 
+    # Detect LoRA checkpoint (PEFT format)
+    is_lora = any("lora_A" in k for k in merged.keys())
+    lora_meta_path = shard_dir / "lora_train_meta.json"
+
+    if is_lora:
+        import json
+        print("\nDetected LoRA checkpoint (PEFT format)")
+
+        # Read LoRA config
+        if lora_meta_path.exists():
+            with open(lora_meta_path) as f:
+                lora_meta = json.load(f)
+            lora_r = lora_meta.get("r", 64)
+            lora_alpha = lora_meta.get("lora_alpha", 128)
+        else:
+            lora_r = 64
+            lora_alpha = 128
+        scaling = lora_alpha / lora_r
+        print(f"  LoRA r={lora_r}, alpha={lora_alpha}, scaling={scaling}")
+
+        # Merge LoRA weights into base weights
+        # Key pattern: base_model.model.model.X.base_layer.weight + lora_A + lora_B
+        base_keys = {}
+        lora_a_keys = {}
+        lora_b_keys = {}
+        other_keys = {}
+
+        for k, v in merged.items():
+            if ".lora_A.default.weight" in k:
+                # Extract module path: base_model.model.model.X.q_proj.lora_A.default.weight -> X.q_proj
+                module = k.replace("base_model.model.model.", "").replace(".lora_A.default.weight", "")
+                lora_a_keys[module] = v
+            elif ".lora_B.default.weight" in k:
+                module = k.replace("base_model.model.model.", "").replace(".lora_B.default.weight", "")
+                lora_b_keys[module] = v
+            elif ".base_layer." in k:
+                # base_model.model.model.X.q_proj.base_layer.weight -> model.X.q_proj.weight
+                new_k = k.replace("base_model.model.", "").replace(".base_layer", "")
+                base_keys[new_k] = v
+            else:
+                # Non-LoRA keys: base_model.model.model.X -> model.X
+                new_k = k.replace("base_model.model.", "")
+                other_keys[new_k] = v
+
+        # Merge: W_merged = W_base + (B @ A) * scaling
+        n_merged = 0
+        for module in lora_a_keys:
+            hf_key = "model." + module + ".weight"
+            if hf_key in base_keys and module in lora_b_keys:
+                A = lora_a_keys[module].float()
+                B = lora_b_keys[module].float()
+                base_keys[hf_key] = base_keys[hf_key].float() + (B @ A) * scaling
+                n_merged += 1
+
+        print(f"  Merged {n_merged} LoRA layers into base weights")
+
+        # Combine all keys
+        remapped = {}
+        for k, v in base_keys.items():
+            remapped[k] = v.to(torch.bfloat16) if v.is_floating_point() else v
+        for k, v in other_keys.items():
+            remapped[k] = v.to(torch.bfloat16) if v.is_floating_point() else v
+
+        del merged
+    else:
+        # Non-LoRA: original logic
+        from transformers import AutoConfig
+        ckpt_keys = set(merged.keys())
+
+        # Detect prefix
+        prefix_to_remove = ""
+        if all(k.startswith("model.") for k in ckpt_keys):
+            prefix_to_remove = "model."
+
+        remapped = {}
+        for k, v in merged.items():
+            new_k = k[len(prefix_to_remove):] if prefix_to_remove and k.startswith(prefix_to_remove) else k
+            remapped[new_k] = v.to(torch.bfloat16) if v.is_floating_point() else v
+
+        del merged
+
     # Load HuggingFace model from config
     from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
 
@@ -139,32 +220,15 @@ def merge_fsdp_to_hf(ckpt_dir: str, output_dir: str):
     print("Creating empty model from config...")
     model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.bfloat16)
 
-    # Try loading state dict with various key mappings
     model_keys = set(model.state_dict().keys())
-    ckpt_keys = set(merged.keys())
+    remapped_keys = set(remapped.keys())
 
-    # Check if keys match directly
-    if model_keys == ckpt_keys:
-        print("Keys match directly")
-        prefix_to_remove = ""
-    elif all(k.startswith("model.") for k in ckpt_keys):
-        # verl sometimes saves with "model." prefix
-        stripped = {k[len("model."):] for k in ckpt_keys}
-        if model_keys == stripped:
-            print("Keys match after removing 'model.' prefix")
-            prefix_to_remove = "model."
-        else:
-            prefix_to_remove = ""
-    else:
-        prefix_to_remove = ""
-
-    # Remap keys and convert dtype
-    remapped = {}
-    for k, v in merged.items():
-        new_k = k[len(prefix_to_remove):] if prefix_to_remove and k.startswith(prefix_to_remove) else k
-        remapped[new_k] = v.to(torch.bfloat16) if v.is_floating_point() else v
-
-    del merged  # free memory
+    missing = model_keys - remapped_keys
+    unexpected = remapped_keys - model_keys
+    if missing:
+        print(f"  Missing keys (first 5): {list(missing)[:5]}")
+    if unexpected:
+        print(f"  Unexpected keys (first 5): {list(unexpected)[:5]}")
 
     try:
         model.load_state_dict(remapped, strict=True)
@@ -173,10 +237,6 @@ def merge_fsdp_to_hf(ckpt_dir: str, output_dir: str):
         print(f"Strict loading failed: {e}")
         result = model.load_state_dict(remapped, strict=False)
         print(f"Loaded non-strict: missing={len(result.missing_keys)}, unexpected={len(result.unexpected_keys)}")
-        if result.missing_keys:
-            print(f"  Missing (first 5): {result.missing_keys[:5]}")
-        if result.unexpected_keys:
-            print(f"  Unexpected (first 5): {result.unexpected_keys[:5]}")
 
     del remapped
 
