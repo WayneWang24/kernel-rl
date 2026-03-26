@@ -199,8 +199,13 @@ srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     ray status
 
 # ===== Step 3: 数据路径探测 =====
-# 优先 CUDA 数据 → KernelBook split → KernelBench Triton → KernelBook 原始
-if [ -f "${PROJECT_DIR}/data/rl_kernelbench_cuda/train.parquet" ]; then
+# 优先 混合数据 → CUDA 数据 → KernelBook split → KernelBench Triton → KernelBook 原始
+if [ -f "${PROJECT_DIR}/data/rl_mixed/train.parquet" ]; then
+    TRAIN_PATH="${PROJECT_DIR}/data/rl_mixed/train.parquet"
+    VAL_PATH="${PROJECT_DIR}/data/rl_mixed/val.parquet"
+    REWARD_FN_NAME="compute_score_auto"
+    echo "Using mixed RL data (KernelBook static+compile + KernelBench compile+run)"
+elif [ -f "${PROJECT_DIR}/data/rl_kernelbench_cuda/train.parquet" ]; then
     TRAIN_PATH="${PROJECT_DIR}/data/rl_kernelbench_cuda/train.parquet"
     VAL_PATH="${PROJECT_DIR}/data/rl_kernelbench_cuda/val.parquet"
     REWARD_FN_NAME="compute_score_auto"
@@ -276,7 +281,7 @@ PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     actor_rollout_ref.model.lora_rank=64 \
     actor_rollout_ref.model.lora_alpha=16 \
     actor_rollout_ref.model.target_modules=all-linear \
-    +actor_rollout_ref.model.override_config.attn_implementation=sdpa \
+    +actor_rollout_ref.model.override_config.attn_implementation=flash_attention_2 \
     actor_rollout_ref.actor.fsdp_config.param_offload=true \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=true \
     +actor_rollout_ref.actor.optim.override_optimizer_config.foreach=false \
@@ -288,6 +293,7 @@ PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     actor_rollout_ref.rollout.enforce_eager=true \
     actor_rollout_ref.rollout.free_cache_engine=true \
     actor_rollout_ref.rollout.load_format=safetensors \
+    ++actor_rollout_ref.rollout.layered_summon=true \
     actor_rollout_ref.rollout.max_model_len=6144 \
     actor_rollout_ref.rollout.n=5 \
     algorithm.use_kl_in_reward=false \
