@@ -306,6 +306,7 @@ PYTHONUNBUFFERED=1 srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     trainer.default_local_dir="${PROJECT_DIR}/checkpoints/grpo_cuda" \
     trainer.n_gpus_per_node=$GPUS_PER_NODE \
     trainer.nnodes=$SLURM_JOB_NUM_NODES \
+    trainer.resume_mode=disable \
     trainer.save_freq=50 \
     trainer.test_freq=-1 \
     trainer.val_before_train=false \
