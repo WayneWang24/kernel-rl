@@ -47,15 +47,24 @@ def _detensor(state_dict: dict) -> tuple:
 
 
 def merge_fsdp_to_hf(ckpt_dir: str, output_dir: str):
-    actor_dir = Path(ckpt_dir) / "actor"
-    hf_dir = actor_dir / "huggingface"
+    ckpt_path = Path(ckpt_dir)
 
-    if not hf_dir.exists():
-        print(f"ERROR: {hf_dir} not found (need config.json + tokenizer)")
+    # Auto-detect structure: GRPO (actor/) vs SFT (flat)
+    actor_dir = ckpt_path / "actor"
+    if actor_dir.exists() and (actor_dir / "huggingface").exists():
+        hf_dir = actor_dir / "huggingface"
+        shard_dir = actor_dir
+        print("Detected GRPO checkpoint structure (actor/)")
+    elif (ckpt_path / "huggingface").exists():
+        hf_dir = ckpt_path / "huggingface"
+        shard_dir = ckpt_path
+        print("Detected SFT checkpoint structure (flat)")
+    else:
+        print(f"ERROR: No huggingface/ dir found in {ckpt_dir} or {ckpt_dir}/actor/")
         return
 
     # Find model shards
-    shards = sorted(actor_dir.glob("model_world_size_*_rank_*.pt"))
+    shards = sorted(shard_dir.glob("model_world_size_*_rank_*.pt"))
     world_size = len(shards)
     print(f"Found {world_size} model shards")
 
