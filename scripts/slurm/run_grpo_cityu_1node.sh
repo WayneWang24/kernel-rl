@@ -135,13 +135,8 @@ else:
 "
 
 # ===== Step 2: 数据路径探测 =====
-# 优先 混合数据 → CUDA 数据 → KernelBook split → KernelBench Triton → KernelBook 原始
-if [ -f "${PROJECT_DIR}/data/rl_mixed/train.parquet" ]; then
-    TRAIN_PATH="${PROJECT_DIR}/data/rl_mixed/train.parquet"
-    VAL_PATH="${PROJECT_DIR}/data/rl_mixed/val.parquet"
-    REWARD_FN_NAME="compute_score_auto"
-    echo "Using mixed RL data (KernelBook static+compile + KernelBench compile+run)"
-elif [ -f "${PROJECT_DIR}/data/rl_kernelbench_cuda/train.parquet" ]; then
+# 优先 KernelBench CUDA（compile+run reward 信号强）
+if [ -f "${PROJECT_DIR}/data/rl_kernelbench_cuda/train.parquet" ]; then
     TRAIN_PATH="${PROJECT_DIR}/data/rl_kernelbench_cuda/train.parquet"
     VAL_PATH="${PROJECT_DIR}/data/rl_kernelbench_cuda/val.parquet"
     REWARD_FN_NAME="compute_score_auto"
@@ -182,10 +177,9 @@ fi
 REWARD_FN_PATH="${PROJECT_DIR}/src/reward/kernel_reward.py"
 
 # ===== Step 3: 动态计算 batch size =====
-# train_batch_size 必须能被 n_gpus 整除
-# ppo_mini_batch_size 必须能被 n_gpus 整除
-TRAIN_BS=$((NUM_WORKING * 4))    # 每 GPU 4 samples
-MINI_BS=$TRAIN_BS                # mini_batch = train_batch（GRPO 不需要多轮）
+# KernelBench 只有 200 条，用小 batch 保证每 epoch 足够多步
+TRAIN_BS=$((NUM_WORKING * 2))    # 每 GPU 2 samples（3 GPU → batch=6）
+MINI_BS=$TRAIN_BS
 
 # ===== Step 4: 启动 GRPO 训练 =====
 echo ""
@@ -220,7 +214,7 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.model.target_modules=all-linear \
     +actor_rollout_ref.model.override_config.attn_implementation=flash_attention_2 \
     actor_rollout_ref.actor.fsdp_config.param_offload=true \
-    actor_rollout_ref.actor.fsdp_config.optimizer_offload=true \
+    actor_rollout_ref.actor.fsdp_config.optimizer_offload=false \
     +actor_rollout_ref.actor.optim.override_optimizer_config.foreach=false \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.rollout.name=vllm \
@@ -239,15 +233,15 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     trainer.critic_warmup=0 \
     trainer.logger='["console"]' \
     trainer.project_name=kernel_rl \
-    trainer.experiment_name=grpo_cuda_vllm_1node \
-    trainer.default_local_dir="${PROJECT_DIR}/checkpoints/grpo_cuda" \
+    trainer.experiment_name=grpo_kernelbench_cuda_1node \
+    trainer.default_local_dir="${PROJECT_DIR}/checkpoints/grpo_kernelbench" \
     trainer.n_gpus_per_node=$NUM_WORKING \
     trainer.nnodes=1 \
     trainer.save_freq=50 \
     trainer.test_freq=-1 \
     trainer.val_before_train=false \
     trainer.max_actor_ckpt_to_keep=1 \
-    trainer.total_epochs=3 \
+    trainer.total_epochs=15 \
     2>&1 | tee "${PROJECT_DIR}/logs/grpo_cityu_1node_${SLURM_JOB_ID}.log"
 
 echo "=== GRPO Training Complete ==="
