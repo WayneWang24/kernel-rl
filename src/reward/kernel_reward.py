@@ -647,70 +647,68 @@ def compute_score_cuda(
     **kwargs,
 ) -> float:
     """
-    CUDA compile+run reward。三阶段混合评分。
+    CUDA compile+run reward。编译导向三阶段评分。
+
+    设计原则：编译是关键里程碑，给最大的 reward 跳跃。
+    结构正确但编不过只给微弱奖励（避免 GRPO 卡在静态分析高原）。
 
     Phase 1 (静态分析, <1ms/sample):
-      0.0  - 无代码块
-      0.05 - 有代码但无有效定义
-      0.1  - 语法错误
-      0.15 - 无 ModelNew 类
-      0.2  - ModelNew 但非 nn.Module 子类
-      0.3  - 无 load_inline / CUDA kernel
-      0.4  - 有 CUDA kernel 但缺 cpp_sources/cuda_sources/functions 三件套
-      0.5  - 完整结构但未编译
+      0.0  - 无代码块 / 无有效定义
+      0.05 - 语法错误
+      0.1  - 无 ModelNew(nn.Module) 类
+      0.15 - 有 ModelNew 但无 CUDA kernel 或缺 load_inline 三件套
+      → 结构完整 = 0.15，进入编译阶段（不是 0.5！）
 
     Phase 2 (编译验证, ~10-60s/sample, 需 nvcc+GPU):
-      0.6  - load_inline() 编译成功
-      0.7  - ModelNew 可实例化
+      0.15 - 结构完整但编译失败（跟无 kernel 一样低）
+      0.5  - load_inline() 编译成功（大跳跃！）
+      0.6  - ModelNew 可实例化
 
     Phase 3 (运行验证, ~5-30s/sample, 需 GPU):
-      0.8  - forward pass 无错误
-      0.9  - 输出 shape 匹配
+      0.7  - forward pass 无错误
+      0.8  - 输出 shape 匹配
       1.0  - 输出值匹配（rtol=1e-2, atol=1e-2）
     """
-    # ---- Phase 1: 静态分析 ----
+    # ---- Phase 1: 静态分析（快速门控）----
     code = extract_code_block(solution_str)
     if code is None:
         return 0.0
 
     if not has_valid_definition(code):
-        return 0.05
+        return 0.0
 
     if not check_syntax(code):
-        return 0.1
+        return 0.05
 
     if not re.search(r"class\s+ModelNew", code):
-        return 0.15
+        return 0.1
 
     if not has_modelnew_class(code):
-        return 0.2
+        return 0.1
 
-    if not has_cuda_kernel(code):
-        return 0.3
+    if not has_cuda_kernel(code) or not has_proper_cuda_structure(code):
+        return 0.15
 
-    if not has_proper_cuda_structure(code):
-        return 0.4
-
-    # 静态分析通过 → score=0.5，进入编译阶段
-    # ---- Phase 2: 编译验证 ----
+    # 静态分析通过 → score=0.15（仅微弱奖励），进入编译阶段
+    # ---- Phase 2: 编译验证（关键里程碑）----
     try:
         compile_script = _build_cuda_compile_script(code)
         proc = _run_subprocess(compile_script, timeout=compile_timeout)
         if proc.returncode != 0 or "COMPILE_OK" not in proc.stdout:
-            return 0.5
+            return 0.15  # 编不过 = 跟没有 kernel 一样
     except subprocess.TimeoutExpired:
-        return 0.5
+        return 0.15
     except Exception:
-        return 0.5
+        return 0.15
 
-    # 编译成功 → score=0.6
+    # 编译成功 → score=0.5（大跳跃 0.15→0.5！GRPO 的主要梯度来源）
     # ModelNew 实例化检查（如果有 reference code）
     reference_code = None
     if isinstance(ground_truth, dict):
         reference_code = ground_truth.get("model_code", "")
 
     if not reference_code:
-        return 0.7  # 无 reference，无法做运行验证
+        return 0.6  # 无 reference，无法做运行验证
 
     # ---- Phase 3: 运行验证 ----
     try:
@@ -721,17 +719,17 @@ def compute_score_cuda(
         if "VERIFY_OK" in stdout:
             return 1.0
         elif "VALUE_MISMATCH" in stdout:
-            return 0.9  # shape 对但值不对
+            return 0.8  # shape 对但值不对
         elif "SHAPE_MISMATCH" in stdout:
-            return 0.8  # forward 能跑但 shape 不对
+            return 0.7  # forward 能跑但 shape 不对
         elif proc.returncode == 0:
-            return 0.8  # forward 无错误
+            return 0.7  # forward 无错误
         else:
-            return 0.7  # 编译成功但实例化/运行失败
+            return 0.6  # 编译成功但实例化/运行失败
     except subprocess.TimeoutExpired:
-        return 0.7  # 运行超时，至少编译通过了
+        return 0.6  # 运行超时，至少编译通过了
     except Exception:
-        return 0.7
+        return 0.6
 
 
 # ============================================================
@@ -829,6 +827,14 @@ def compute_score_auto(
     - dict with "format"="original" → compute_score（Triton 原始格式）
     - str → compute_score（Triton 原始格式）
     """
+    # 诊断日志（首次调用时打印，确认路由正确）
+    if not hasattr(compute_score_auto, "_logged"):
+        import sys
+        gt_type = type(ground_truth).__name__
+        gt_keys = list(ground_truth.keys()) if isinstance(ground_truth, dict) else "N/A"
+        print(f"[reward-debug] ground_truth type={gt_type}, keys={gt_keys}", file=sys.stderr, flush=True)
+        compute_score_auto._logged = True
+
     if isinstance(ground_truth, dict):
         # 优先按 format 字段路由（混合数据集中 parquet schema 合并后所有 key 都存在，
         # 缺失值为 None，所以用 .get() 而非 "key in dict" 判断）
