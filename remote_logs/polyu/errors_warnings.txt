@@ -1,0 +1,30 @@
+# errors / warnings / NaN / OOM grep (last 500 hits)
+Source: logs/grpo_polyu.log
+
+3:ray init kwargs: {'num_cpus': None, 'runtime_env': {'env_vars': {'TOKENIZERS_PARALLELISM': 'true', 'VLLM_LOGGING_LEVEL': 'WARN', 'VLLM_ALLOW_RUNTIME_LORA_UPDATING': 'true', 'CUDA_DEVICE_MAX_CONNECTIONS': '1', 'VLLM_DISABLE_COMPILE_CACHE': '1', 'HCCL_HOST_SOCKET_PORT_RANGE': 'auto', 'HCCL_NPU_SOCKET_PORT_RANGE': 'auto'}, 'working_dir': None}}
+5:/home/vm/miniconda3/envs/kernel-rl/lib/python3.10/site-packages/ray/_private/worker.py:2052: FutureWarning: Tip: In future versions of Ray, Ray will no longer override accelerator visible devices env var if num_gpus=0 or num_gpus=None (default). To enable this behavior and turn off this error message, set RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0
+6:  warnings.warn(
+504:[36m(TaskRunner pid=49607)[0m           'truncation': 'error',
+724:[36m(WorkerDict pid=50465)[0m   warnings.warn(
+732:[36m(WorkerDict pid=50458)[0m   warnings.warn([32m [repeated 2x across cluster][0m
+787:[36m(vLLMHttpServer pid=52672)[0m   warnings.warn(
+806:[36m(vLLMHttpServer pid=52671)[0m   warnings.warn([32m [repeated 2x across cluster][0m
+824:Error executing job with overrides: ['algorithm.adv_estimator=grpo', 'data.train_files=/home/vm/workspace/kernel-rl/data/rl_kernelbench_cuda/train.parquet', 'data.val_files=/home/vm/workspace/kernel-rl/data/rl_kernelbench_cuda/val.parquet', 'data.train_batch_size=12', 'data.max_prompt_length=2048', 'data.max_response_length=4096', 'data.filter_overlong_prompts=true', 'data.truncation=error', 'actor_rollout_ref.model.path=/home/vm/workspace/kernel-rl/checkpoints/sft_3b_merged', 'actor_rollout_ref.actor.optim.lr=1e-6', 'actor_rollout_ref.model.use_remove_padding=false', 'actor_rollout_ref.actor.ppo_mini_batch_size=12', 'actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=2', 'actor_rollout_ref.actor.use_kl_loss=false', 'actor_rollout_ref.actor.entropy_coeff=0', 'actor_rollout_ref.model.enable_gradient_checkpointing=true', '+actor_rollout_ref.model.override_config.attn_implementation=sdpa', 'actor_rollout_ref.actor.fsdp_config.param_offload=false', 'actor_rollout_ref.actor.fsdp_config.optimizer_offload=false', 'actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=2', 'actor_rollout_ref.rollout.name=vllm', 'actor_rollout_ref.rollout.mode=async', 'actor_rollout_ref.rollout.tensor_model_parallel_size=1', 'actor_rollout_ref.rollout.gpu_memory_utilization=0.5', 'actor_rollout_ref.rollout.enforce_eager=true', 'actor_rollout_ref.rollout.free_cache_engine=true', 'actor_rollout_ref.rollout.load_format=safetensors', 'actor_rollout_ref.rollout.max_model_len=6144', 'actor_rollout_ref.rollout.n=5', 'algorithm.use_kl_in_reward=false', 'custom_reward_function.path=/home/vm/workspace/kernel-rl/src/reward/kernel_reward.py', 'custom_reward_function.name=compute_score_auto', 'trainer.critic_warmup=0', 'trainer.logger=["console"]', 'trainer.project_name=kernel_rl', 'trainer.experiment_name=grpo_3b_cuda_3gpu', 'trainer.default_local_dir=/home/vm/workspace/kernel-rl/checkpoints/grpo_3b_cuda', 'trainer.n_gpus_per_node=3', 'trainer.nnodes=1', 'trainer.save_freq=50', 'trainer.test_freq=-1', 'trainer.val_before_train=false', 'trainer.max_actor_ckpt_to_keep=1', 'trainer.total_epochs=3']
+825:Traceback (most recent call last):
+862:ray.exceptions.RayTaskError(FileNotFoundError): [36mray::TaskRunner.run()[39m (pid=49607, ip=10.22.63.111, actor_id=02b5e57f6a842db37d423a2d01000000, repr=<main_ppo.TaskRunner object at 0x7f5802379690>)
+871:ray.exceptions.RayTaskError(FileNotFoundError): [36mray::WorkerDict.actor_rollout_load_checkpoint()[39m (pid=50458, ip=10.22.63.111, actor_id=cf006eb91147645a4569ff1001000000, repr=<verl.single_controller.ray.base.WorkerDict object at 0x7c492df3c1f0>)
+875:    raise self._exception
+890:FileNotFoundError: [Errno 2] No such file or directory: '/home/vm/workspace/kernel-rl/checkpoints/grpo_3b_cuda/global_step_75/actor/model_world_size_3_rank_0.pt'
+891:[36m(TaskRunner pid=49607)[0m Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): [36mray::WorkerDict.actor_rollout_load_checkpoint()[39m (pid=50465, ip=10.22.63.111, actor_id=6a8e4d3dcfb3eebca3513ca201000000, repr=<verl.single_controller.ray.base.WorkerDict object at 0x7e1edea440d0>)
+895:[36m(TaskRunner pid=49607)[0m     raise self._exception
+910:[36m(TaskRunner pid=49607)[0m FileNotFoundError: [Errno 2] No such file or directory: '/home/vm/workspace/kernel-rl/checkpoints/grpo_3b_cuda/global_step_75/actor/model_world_size_3_rank_2.pt'
+911:[36m(TaskRunner pid=49607)[0m Unhandled error (suppress with 'RAY_IGNORE_UNHANDLED_ERRORS=1'): [36mray::WorkerDict.actor_rollout_load_checkpoint()[39m (pid=50460, ip=10.22.63.111, actor_id=61042a3ba5dc4516dfada0ef01000000, repr=<verl.single_controller.ray.base.WorkerDict object at 0x73ab23e18070>)
+915:[36m(TaskRunner pid=49607)[0m     raise self._exception
+930:[36m(TaskRunner pid=49607)[0m FileNotFoundError: [Errno 2] No such file or directory: '/home/vm/workspace/kernel-rl/checkpoints/grpo_3b_cuda/global_step_75/actor/model_world_size_3_rank_1.pt'
+931:[36m(vLLMHttpServer pid=52671)[0m ERROR 05-07 21:12:03 [core_client.py:564] Engine core proc EngineCore_DP0 died unexpectedly, shutting down client.
+933:[36m(vLLMHttpServer pid=52671)[0m [1;36m(Worker pid=53401)[0;0m   warnings.warn('resource_tracker: process died unexpectedly, '
+934:[36m(vLLMHttpServer pid=52671)[0m Traceback (most recent call last):
+937:[36m(vLLMHttpServer pid=52671)[0m KeyError: '/psm_790b75f7'
+938:[36m(vLLMHttpServer pid=52671)[0m Traceback (most recent call last):
+941:[36m(vLLMHttpServer pid=52671)[0m KeyError: '/mp-u3ld0_go'
+944:[36m(vLLMHttpServer pid=52673)[0m ERROR 05-07 21:12:03 [core_client.py:564] Engine core proc EngineCore_DP0 died unexpectedly, shutting down client.[32m [repeated 2x across cluster][0m
