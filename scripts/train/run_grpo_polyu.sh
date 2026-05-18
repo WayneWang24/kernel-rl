@@ -22,6 +22,23 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 mkdir -p "${PROJECT_DIR}/logs"
 
+# ===== 退出钩子：无论成败，自动同步日志到 GitHub =====
+on_exit() {
+    local rc=$?
+    set +e
+    {
+        echo ""
+        echo "[trap] script exited (rc=$rc) at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+        if [ -f "${PROJECT_DIR}/scripts/sync_remote.sh" ]; then
+            echo "[trap] running sync_remote.sh ..."
+            bash "${PROJECT_DIR}/scripts/sync_remote.sh"
+        else
+            echo "[trap] sync_remote.sh not found, skip"
+        fi
+    } >> "${PROJECT_DIR}/logs/grpo_polyu.log" 2>&1
+}
+trap on_exit EXIT
+
 # ===== 环境变量 =====
 export RAY_memory_monitor_refresh_ms=0
 export HYDRA_FULL_ERROR=1
@@ -79,8 +96,13 @@ else:
 "
 
 # ===== Step 2: 数据路径探测 =====
-# 优先 CUDA 数据（compile+run reward）
-if [ -f "${PROJECT_DIR}/data/rl_kernelbench_cuda/train.parquet" ]; then
+# 优先 KernelBench Triton（compile+run reward，与 SFT 格式对齐）
+if [ -f "${PROJECT_DIR}/data/rl_kernelbench_triton/train.parquet" ]; then
+    TRAIN_PATH="${PROJECT_DIR}/data/rl_kernelbench_triton/train.parquet"
+    VAL_PATH="${PROJECT_DIR}/data/rl_kernelbench_triton/val.parquet"
+    REWARD_FN_NAME="compute_score_auto"
+    echo "Using KernelBench Triton RL data (compile+run reward)"
+elif [ -f "${PROJECT_DIR}/data/rl_kernelbench_cuda/train.parquet" ]; then
     TRAIN_PATH="${PROJECT_DIR}/data/rl_kernelbench_cuda/train.parquet"
     VAL_PATH="${PROJECT_DIR}/data/rl_kernelbench_cuda/val.parquet"
     REWARD_FN_NAME="compute_score_auto"
@@ -92,7 +114,7 @@ elif [ -f "${PROJECT_DIR}/data/split/rl/train.parquet" ]; then
     echo "WARNING: Using KernelBook split RL data (static reward only!)"
 else
     echo "ERROR: No RL training data found!"
-    echo "Run: python scripts/data/prepare_rl_kernelbench.py --backend cuda --output_dir data/rl_kernelbench_cuda"
+    echo "Run: python scripts/data/prepare_rl_kernelbench.py --backend triton --output_dir data/rl_kernelbench_triton"
     exit 1
 fi
 
@@ -155,6 +177,7 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.load_format=safetensors \
     actor_rollout_ref.rollout.max_model_len=6144 \
     actor_rollout_ref.rollout.n=5 \
+    actor_rollout_ref.rollout.agent.num_workers=4 \
     algorithm.use_kl_in_reward=false \
     custom_reward_function.path="$REWARD_FN_PATH" \
     custom_reward_function.name="$REWARD_FN_NAME" \
